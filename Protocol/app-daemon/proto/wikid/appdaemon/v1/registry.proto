@@ -1,0 +1,31 @@
+// Registry read surface (first slice): the wiki list.
+//
+// Mapping rule: fields mirror `WikiDescriptor` (Sources/WikiFSCore/Core/
+// WikiDescriptor.swift) 1:1. The registry is MRU-ordered by the daemon;
+// `ListWikisReply` preserves that order.
+syntax = "proto3";
+
+package wikid.appdaemon.v1;
+
+import "google/protobuf/timestamp.proto";
+import "wikid/appdaemon/v1/common.proto";
+
+option swift_prefix = "AppDaemon";
+
+message ListWikisRequest {
+  reserved 1 to 16;
+}
+
+message WikiDescriptor {
+  WikiId id = 1;
+  string display_name = 2;
+  google.protobuf.Timestamp created_at = 3;
+  google.protobuf.Timestamp last_used_at = 4;
+  // Absent when no home page is set — `optional` gives explicit presence on
+  // both encoders; never send an empty WikiId sentinel.
+  optional PageId home_page_id = 5;
+}
+
+message ListWikisReply {
+  repeated WikiDescriptor wikis = 1;
+}

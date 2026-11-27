@@ -94,7 +94,11 @@ struct DaemonWorkloadClientTimeoutTests {
         // surface; answering with empty data yields a catchable decode error.
 
         func search(request: Data, reply: @escaping (Data) -> Void) { reply(Data()) }
-        func listWikis(reply: @escaping (Data) -> Void) { reply(Data()) }
+            func grpcAdmission(request: Data, reply: @escaping (Data) -> Void) {
+        reply((try? JSONEncoder().encode(DaemonGRPCAdmissionReply.unavailable())) ?? Data())
+    }
+
+func listWikis(reply: @escaping (Data) -> Void) { reply(Data()) }
         func createWiki(name: String, reply: @escaping (Data?) -> Void) { reply(nil) }
         func deleteWiki(id: String, reply: @escaping (Bool) -> Void) { reply(false) }
         func renameWiki(id: String, name: String, reply: @escaping (Bool) -> Void) { reply(false) }

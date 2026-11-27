@@ -232,6 +232,52 @@ public final class WikiDaemonConnection: @unchecked Sendable {
         connection.invalidate()
     }
 
+    // MARK: - gRPC endpoint admission (plans/app-daemon-wire-contract.md)
+
+    /// Ask the daemon to admit THIS connection to its gRPC endpoint. Returns
+    /// the versioned reply; `endpointAvailable == false` means the client
+    /// stays on XPC. Never logs the bootstrap credential.
+    public func grpcAdmission(
+        timeout: Duration = .seconds(15)
+    ) async throws -> DaemonGRPCAdmissionReply {
+        let requestData = try JSONEncoder().encode(DaemonGRPCAdmissionRequest())
+        let box = ContinuationResumeBox()
+        let replyData = try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<Data, Error>) in
+            let timeoutTask = Task.detached(priority: .userInitiated) {
+                do {
+                    try await Task.sleep(for: timeout)
+                    box.resume(.failure(WikiDaemonError.connectionFailed), continuation)
+                } catch is CancellationError {
+                    // The XPC reply or error handler completed first.
+                } catch {
+                    DebugLog.store("grpcAdmission: timeout task failed: \(error)")
+                    box.resume(.failure(WikiDaemonError.connectionFailed), continuation)
+                }
+            }
+            func finish(_ result: Result<Data, Error>) {
+                timeoutTask.cancel()
+                box.resume(result, continuation)
+            }
+            let proxy = connection.remoteObjectProxyWithErrorHandler { error in
+                DebugLog.store("grpcAdmission: XPC failed: \(error)")
+                finish(.failure(WikiDaemonError.connectionFailed))
+            }
+            guard let daemon = proxy as? WikiDaemonProtocol else {
+                finish(.failure(WikiDaemonError.connectionFailed))
+                return
+            }
+            daemon.grpcAdmission(request: requestData) { data in
+                finish(.success(data))
+            }
+        }
+        let reply = try JSONDecoder().decode(DaemonGRPCAdmissionReply.self, from: replyData)
+        guard reply.version == DaemonGRPCAdmissionWire.currentVersion else {
+            throw WikiDaemonError.unexpectedReply
+        }
+        return reply
+    }
+
     // MARK: - Registry
 
     /// Run the signed production-service extractor boundary probe.

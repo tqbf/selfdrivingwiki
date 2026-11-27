@@ -171,6 +171,14 @@ struct ProcessSignalSafetyAuditTests {
                   primitive: .posixSignal):
                 (2, "liveness probes only: zero signals check that the exact group "
                     + "created by ACPTestProcessGroup has ended after verified cleanup"),
+            .init(path: "Sources/AppDaemonSmoke/main.swift",
+                  primitive: .posixSignal):
+                (2, "guarded: the signed smoke stops the launchd-spawned wikid "
+                    + "daemon only after proc_pidpath proves the executable is "
+                    + "wikid.xpc/Contents/MacOS/wikid and the kernel start time is "
+                    + "observed (a raced respawn cannot inherit the identity); TERM "
+                    + "lets the daemon run its own guarded teardown. The second call "
+                    + "site is signal-zero liveness polling, no signal delivered"),
 
             // --- Developer app lifecycle, not test helpers -------------------
             // NOT a safety approval. These match by absolute installed-app path

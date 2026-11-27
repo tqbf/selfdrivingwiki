@@ -1,0 +1,44 @@
+// Session admission (first slice): the credential exchange.
+//
+// Flow: the client obtains a short-lived (30 s) bootstrap credential and the
+// endpoint path over the XPC admission call — never from this transport. It
+// then calls `AdmitSession` with `authorization: Bearer <bootstrap>`; a
+// valid, unexpired bootstrap exchanges once for the session bearer, which is
+// valid until revocation (XPC invalidation, daemon exit, or explicit
+// revocation).
+//
+// Idempotency: the same unexpired bootstrap credential exchanges to the SAME
+// bearer on every call within its window — a dropped reply is safely
+// retried within the window without creating a second session. After
+// expiry, XPC issues a fresh bootstrap for the same live session.
+//
+// The bearer never appears in a message payload — only in the reply's
+// `session_credential` bytes, over the loopback socket, inside the
+// mode-0700 directory.
+syntax = "proto3";
+
+package wikid.appdaemon.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option swift_prefix = "AppDaemon";
+
+message AdmitSessionRequest {
+  // Intentionally empty: the bootstrap credential rides in the gRPC
+  // `authorization` metadata only.
+  reserved 1 to 16;
+}
+
+message AdmitSessionReply {
+  // The session bearer credential (32 random bytes). Sent on every
+  // subsequent RPC as `authorization: Bearer <hex>`. Never logged.
+  bytes session_credential = 1;
+
+  // The daemon instance id this session is bound to; must equal the
+  // capabilities handshake's instance id.
+  string daemon_instance_id = 2;
+
+  // When the session was admitted (informational; the session has no
+  // server-side expiry — it ends at revocation).
+  google.protobuf.Timestamp admitted_at = 3;
+}

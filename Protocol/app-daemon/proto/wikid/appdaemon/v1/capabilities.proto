@@ -1,0 +1,35 @@
+// Capabilities handshake (first slice): the client's FIRST call after
+// admission, before any workload RPC.
+syntax = "proto3";
+
+package wikid.appdaemon.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option swift_prefix = "AppDaemon";
+
+message GetCapabilitiesRequest {
+  // Intentionally empty. The caller identifies itself via its session
+  // credential metadata; future revisions may add a requested-capability
+  // list under new field numbers.
+  reserved 1 to 16;
+}
+
+message GetCapabilitiesReply {
+  // The proto package contract version this daemon serves (1 for
+  // wikid.appdaemon.v1). Clients reject on mismatch with a typed
+  // CAPABILITY_MISMATCH failure before dispatching workload calls.
+  uint32 contract_version = 1;
+
+  // Fresh random identifier per daemon process lifetime. A client that
+  // authenticated against instance A and receives instance B in a reply must
+  // treat its session as invalid (the admission credential is instance-bound).
+  string daemon_instance_id = 2;
+
+  // Capability names this daemon serves, e.g. "registry.v1", "events.v1".
+  // Stable dotted strings; clients check membership, not order.
+  repeated string capabilities = 3;
+
+  // When this reply was produced. Informational.
+  google.protobuf.Timestamp served_at = 4;
+}

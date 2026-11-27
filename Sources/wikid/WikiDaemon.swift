@@ -108,6 +108,16 @@ final class WikiDaemon: @unchecked Sendable {
     private let chatHostCreationGate = ChatHostCreationGate()
     #endif
 
+    // MARK: - gRPC workload endpoint (plans/app-daemon-wire-contract.md)
+
+    /// The gRPC admission coordinator installed by the daemon HOST after boot
+    /// (``installGRPCAdmissionCoordinator``). Nil keeps the daemon XPC-only
+    /// (listener failed to start, or a host that chose not to serve gRPC).
+    /// Guarded by `queue`; written once at boot before any client connects.
+    #if canImport(WikiDaemonGRPC)
+    private var grpcCoordinator: DaemonGRPCAdmissionCoordinator?
+    #endif
+
     // MARK: - State (accessed on `queue`)
 
     private let queue = DispatchQueue(label: "com.selfdrivingwiki.wikid")
@@ -2067,6 +2077,49 @@ final class WikiDaemon: @unchecked Sendable {
         queue.sync { eventSinks.map { (id: $0.id, sink: $0.sink) } }
     }
 
+    // MARK: - gRPC workload endpoint (plans/app-daemon-wire-contract.md)
+
+    #if canImport(WikiDaemonGRPC)
+    /// Install the gRPC admission coordinator (the host owns the listener
+    /// lifecycle). Written once at boot, before any client connects.
+    func installGRPCAdmissionCoordinator(_ coordinator: DaemonGRPCAdmissionCoordinator) {
+        queue.sync { grpcCoordinator = coordinator }
+    }
+
+    /// The XPC admission reply for one connection (JSON
+    /// `DaemonGRPCAdmissionReply`). Answers the versioned
+    /// `endpointAvailable == false` reply when no coordinator is installed.
+    /// `connectionIsLive` runs at mint time (see the coordinator). The
+    /// bootstrap credential rides only in this reply — never logged.
+    func grpcAdmissionData(
+        connectionID: String, connectionIsLive: @escaping @Sendable () -> Bool
+    ) async -> Data {
+        let coordinator = queue.sync { grpcCoordinator }
+        guard let coordinator else {
+            return (DebugLog.trying("JSONEncoder.encode", operation: {
+                try JSONEncoder().encode(DaemonGRPCAdmissionReply.unavailable())
+            })) ?? Data()
+        }
+        return await coordinator.admissionReply(
+            connectionID: connectionID, connectionIsLive: connectionIsLive)
+    }
+
+    /// XPC invalidation for one connection: revoke its gRPC session
+    /// (idempotent). No new gRPC calls are admitted and live streams
+    /// terminate before the exporter's staging sweep runs.
+    func revokeGRPCSession(connectionID: String) {
+        let coordinator = queue.sync { grpcCoordinator }
+        coordinator?.revokeSession(connectionID: connectionID)
+    }
+
+    /// Terminal gRPC teardown before daemon shutdown: stop accepting,
+    /// revoke sessions, close streams, unlink under the guard, release it.
+    func stopGRPC() async {
+        let coordinator = queue.sync { grpcCoordinator }
+        await coordinator?.stop()
+    }
+    #endif
+
     // MARK: - Registry events (Phase 3 slice 2)
 
     /// Deliver one registry-event envelope to every LIVE sink: the daemon's
@@ -2088,6 +2141,13 @@ final class WikiDaemon: @unchecked Sendable {
             DaemonRegistryEvent(
                 kind: kind, wikiID: wikiID.rawValue, displayName: displayName),
             proxies: proxies)
+        // Same event, second transport: the gRPC hub (plans/app-daemon-wire-
+        // contract.md). Self-validating family — no watermark, no replay.
+        #if canImport(WikiDaemonGRPC)
+        let hub = queue.sync { grpcCoordinator?.hub }
+        hub?.publish(
+            kind: kind, wikiIDRawValue: wikiID.rawValue, displayName: displayName)
+        #endif
         #endif
     }
 

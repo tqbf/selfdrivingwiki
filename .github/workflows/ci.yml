@@ -177,6 +177,26 @@ jobs:
         env:
           WIKIFS_APP_TESTS: "1"
         run: SWIFT_TEST_NUM_WORKERS=1 scripts/test-optin-app-tests-reconciled.sh --expect RemoteWikiStoreTests --filter 'DaemonStoreCommandExecutorTests|RemoteWikiStoreTests|RemoteStoreConcurrencyTests|RemoteStoreDedupeTests|RemoteStoreSessionBootstrapTests|DaemonStoreEventTests|WikiDaemonEventSinkTests'
+      # --- App–daemon wire contract (plans/app-daemon-wire-contract.md) ----
+      # Required gates, NO continue-on-error: schema drift or a breaking
+      # edit must fail the build.
+      - name: App-daemon proto tools (pinned + digest-verified)
+        timeout-minutes: 20
+        run: make app-daemon-tools
+      - name: App-daemon proto checks (drift, lint, breaking, negative)
+        timeout-minutes: 10
+        run: make check-app-daemon-proto
+      - name: App-daemon interop peer (cargo build --locked)
+        timeout-minutes: 20
+        run: make app-daemon-interop
+      - name: App-daemon gRPC suites (admission + interop, both roles)
+        timeout-minutes: 20
+        env:
+          WIKIFS_APP_TESTS: "1"
+        run: SWIFT_TEST_NUM_WORKERS=1 WIKIFS_INTEROP_PEER="$PWD/tools/app-daemon-interop/target/debug/app-daemon-interop" scripts/test-optin-app-tests-reconciled.sh --expect 'App Daemon Rust interop' --filter 'AppDaemonAdmissionTests|AppDaemonRustInteropTests'
+      - name: App-daemon contract suites (source contracts)
+        timeout-minutes: 15
+        run: SWIFT_TEST_NUM_WORKERS=1 scripts/test-optin-app-tests-reconciled.sh --expect 'App Daemon proto coverage' --filter 'AppDaemonProtoCoverageTests|AppDaemonBootstrapOnlyContractTests|AppDaemonSessionStoreContractTests'
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27.0'

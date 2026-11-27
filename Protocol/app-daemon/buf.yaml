@@ -1,0 +1,22 @@
+version: v2
+modules:
+  - path: proto
+lint:
+  use:
+    - STANDARD
+  except:
+    # The service is THE app↔daemon surface; `AppDaemon` (not
+    # `AppDaemonService`) matches the contract's name and every generated
+    # namespace on both languages. Wire-visible only as the method path
+    # prefix, accepted as the reviewed baseline.
+    - SERVICE_SUFFIX
+    # Reply/Event names mirror the daemon's existing domain vocabulary
+    # (WikiDescriptor, DaemonEvent) rather than the Response-suffix
+    # convention; same reviewed-baseline rationale.
+    - RPC_RESPONSE_STANDARD_NAME
+breaking:
+  # Wire-compatible checks against the committed baseline descriptor image
+  # (Protocol/app-daemon/baseline/image.binpb). Regenerate the baseline ONLY
+  # after a compatibility review (make update-app-daemon-proto-baseline).
+  use:
+    - FILE

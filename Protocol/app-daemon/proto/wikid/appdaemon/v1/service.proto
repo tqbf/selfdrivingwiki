@@ -1,0 +1,53 @@
+// The app–daemon workload service surface (first slice).
+//
+// Transport contract (language-neutral):
+// - Served ONLY on a Unix domain socket inside a mode-0700 directory under
+//   the App Group container (`g/s`). No TCP listener exists, ever.
+// - Every RPC carries `authorization: Bearer <credential>` metadata. The
+//   credential is a 256-bit opaque random value issued over the XPC
+//   admission path, bound to one XPC connection + daemon instance, valid
+//   until revocation (or process exit). Same-user socket permissions are
+//   NOT sufficient authentication.
+// - Unary calls carry an explicit per-call deadline (client-set; the server
+//   enforces its own ceiling). A mutation that fails ambiguously (deadline,
+//   transport death) is NEVER auto-retried by the client.
+// - Message bounds: a single request or response message MUST NOT exceed
+//   4 MiB (the XPC store transport's existing frame cap —
+//   `DaemonDomainBudgets`). Larger payloads chunk across calls (future
+//   blob family); receivers reject oversize with RESOURCE_EXHAUSTED +
+//   ErrorDetails(RESOURCE_EXHAUSTED).
+// - gRPC retries and hedging are DISABLED end-to-end (no service config
+//   retry policy is negotiated; clients implement their own bounded
+//   bootstrap/subscription-recovery backoff only).
+syntax = "proto3";
+
+package wikid.appdaemon.v1;
+
+import "wikid/appdaemon/v1/capabilities.proto";
+import "wikid/appdaemon/v1/admission.proto";
+import "wikid/appdaemon/v1/events.proto";
+import "wikid/appdaemon/v1/registry.proto";
+
+option swift_prefix = "AppDaemon";
+
+// The daemon's typed app surface. Failures are gRPC status errors whose
+// details carry `ErrorDetails` (see common.proto).
+service AppDaemon {
+  // Exchange the XPC-issued bootstrap credential for the session bearer.
+  // Authenticated with the bootstrap credential in `authorization` metadata.
+  // Idempotent within the bootstrap window (same bearer returned).
+  rpc AdmitSession(AdmitSessionRequest) returns (AdmitSessionReply);
+
+  // The FIRST workload call on a session: version + capability handshake.
+  // Always authenticated (missing/expired/revoked credential fails here
+  // before anything else).
+  rpc GetCapabilities(GetCapabilitiesRequest) returns (GetCapabilitiesReply);
+
+  // The wiki registry, MRU-ordered.
+  rpc ListWikis(ListWikisRequest) returns (ListWikisReply);
+
+  // Live registry events. Server-streaming. Ends only on client cancel or
+  // session revocation; daemon-side overflow/epoch change fails the stream
+  // with RESYNC_REQUIRED and the client resyncs from authoritative state.
+  rpc SubscribeEvents(SubscribeEventsRequest) returns (stream DaemonEvent);
+}

@@ -1,0 +1,37 @@
+{
+  "comment": "Pinned codegen tools for Protocol/app-daemon. make app-daemon-tools downloads each artifact, verifies the SHA-256 digest, and installs the binaries into tmp/app-daemon-tools/bin. Digest mismatch fails the build. Update only with a deliberate tool-version bump recorded in progress/.",
+  "platforms": {
+    "macos_aarch64": {
+      "protoc": {
+        "version": "36.2",
+        "url": "https://github.com/protocolbuffers/protobuf/releases/download/v36.2/protoc-36.2-osx-aarch_64.zip",
+        "sha256": "9cd98a532c5c5e0c4161314de0225de27e4c8a323917b6ea7b1b714d3ae23466",
+        "binary": "bin/protoc"
+      },
+      "buf": {
+        "version": "1.75.0",
+        "url": "https://github.com/bufbuild/buf/releases/download/v1.75.0/buf-Darwin-arm64.tar.gz",
+        "sha256": "5478531c4645c5b80866e87d76d73f0e8bf5a35644b12c92cbdcc408e7c8b9d3",
+        "binary": "bin/buf"
+      },
+      "protoc_gen_swift": {
+        "version": "1.41.0",
+        "url": "https://github.com/apple/swift-protobuf/archive/refs/tags/1.41.0.tar.gz",
+        "sha256": "33ee375c19871015bd7d09e0c54c9d157fb9e7f288716b1f29810df6fc258ae1",
+        "comment": "Built from the pinned source archive: swift build -c release --product protoc-gen-swift",
+        "binary": "bin/protoc-gen-swift"
+      },
+      "protoc_gen_grpc_swift_2": {
+        "version": "2.5.0",
+        "url": "https://github.com/grpc/grpc-swift-protobuf/archive/refs/tags/2.5.0.tar.gz",
+        "sha256": "dc6238a467fe3466477e6509773b0f8fe84a9f58dd97bc39f7fb082e3b222cf6",
+        "comment": "Built from the pinned source archive: swift build -c release --product protoc-gen-grpc-swift-2",
+        "binary": "bin/protoc-gen-grpc-swift-2"
+      }
+    }
+  },
+  "rust_toolchain": {
+    "pin_file": "tools/app-daemon-interop/rust-toolchain.toml",
+    "comment": "The Rust toolchain is pinned by rust-toolchain.toml and installed by rustup at first cargo invocation; Cargo.lock pins crate versions."
+  }
+}

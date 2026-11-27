@@ -193,6 +193,18 @@ import Foundation
     /// is a typed `invalidRequest`). Replies are frame-size pre-flighted
     /// against the 4 MiB transport cap.
     func storeOperation(_ wikiID: String, request: Data, reply: @escaping (Data) -> Void)
+
+    // MARK: - gRPC endpoint admission (plans/app-daemon-wire-contract.md)
+
+    /// Admit THIS connection to the daemon's gRPC endpoint: the reply is the
+    /// JSON-encoded `DaemonGRPCAdmissionReply` — endpoint path + short-lived
+    /// bootstrap credential bound to this connection and daemon instance.
+    /// One logical session per connection: repeated calls for the same live
+    /// connection return an admission for the SAME session (a fresh
+    /// bootstrap window), never a second one. Returns the
+    /// `endpointAvailable == false` reply when the listener is not serving.
+    /// The credential is never logged on either side.
+    func grpcAdmission(request: Data, reply: @escaping (Data) -> Void)
 }
 
 public struct SignedWikiDExtractorProbeRequest: Codable, Equatable, Sendable {
