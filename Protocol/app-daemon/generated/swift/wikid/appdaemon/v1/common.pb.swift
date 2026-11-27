@@ -145,6 +145,33 @@ public nonisolated struct AppDaemonErrorDetails: Sendable {
 
     /// The call exceeded its deadline (server-side enforcement).
     case deadlineExceeded // = 8
+
+    /// Step 2 workload families (plans/app-daemon-wire-contract.md §"Typed
+    /// failures"). Numeric values are stable after acceptance; only append.
+    case storeOpenFailed // = 9
+    case storeSqlite // = 10
+    case pageNotFound // = 11
+    case chatNotFound // = 12
+    case sourceNotFound // = 13
+    case sourceVersionNotFound // = 14
+    case sourceMarkdownVersionNotFound // = 15
+    case noProcessedMarkdown // = 16
+    case deletionRestricted // = 17
+    case invalidBookmarkRow // = 18
+    case invalidRendererEventID // = 19
+    case storeUnexpected // = 20
+    case duplicateContent // = 21
+    case duplicateURL // = 22
+    case pageConflict // = 23
+    case pageCreateConflict // = 24
+    case pageExpectedTargetMissing // = 25
+    case strategyRevisionConflict // = 26
+    case sourceMarkdownConflict // = 27
+    case storeEpochMismatch // = 28
+    case outcomeUnknown // = 29
+    case queueOwnershipTransition // = 30
+    case operationFailed // = 31
+    case invalidEnvelope // = 32
     case UNRECOGNIZED(Int)
 
     public init() {
@@ -162,6 +189,30 @@ public nonisolated struct AppDaemonErrorDetails: Sendable {
       case 6: self = .unavailable
       case 7: self = .resourceExhausted
       case 8: self = .deadlineExceeded
+      case 9: self = .storeOpenFailed
+      case 10: self = .storeSqlite
+      case 11: self = .pageNotFound
+      case 12: self = .chatNotFound
+      case 13: self = .sourceNotFound
+      case 14: self = .sourceVersionNotFound
+      case 15: self = .sourceMarkdownVersionNotFound
+      case 16: self = .noProcessedMarkdown
+      case 17: self = .deletionRestricted
+      case 18: self = .invalidBookmarkRow
+      case 19: self = .invalidRendererEventID
+      case 20: self = .storeUnexpected
+      case 21: self = .duplicateContent
+      case 22: self = .duplicateURL
+      case 23: self = .pageConflict
+      case 24: self = .pageCreateConflict
+      case 25: self = .pageExpectedTargetMissing
+      case 26: self = .strategyRevisionConflict
+      case 27: self = .sourceMarkdownConflict
+      case 28: self = .storeEpochMismatch
+      case 29: self = .outcomeUnknown
+      case 30: self = .queueOwnershipTransition
+      case 31: self = .operationFailed
+      case 32: self = .invalidEnvelope
       default: self = .UNRECOGNIZED(rawValue)
       }
     }
@@ -177,6 +228,30 @@ public nonisolated struct AppDaemonErrorDetails: Sendable {
       case .unavailable: return 6
       case .resourceExhausted: return 7
       case .deadlineExceeded: return 8
+      case .storeOpenFailed: return 9
+      case .storeSqlite: return 10
+      case .pageNotFound: return 11
+      case .chatNotFound: return 12
+      case .sourceNotFound: return 13
+      case .sourceVersionNotFound: return 14
+      case .sourceMarkdownVersionNotFound: return 15
+      case .noProcessedMarkdown: return 16
+      case .deletionRestricted: return 17
+      case .invalidBookmarkRow: return 18
+      case .invalidRendererEventID: return 19
+      case .storeUnexpected: return 20
+      case .duplicateContent: return 21
+      case .duplicateURL: return 22
+      case .pageConflict: return 23
+      case .pageCreateConflict: return 24
+      case .pageExpectedTargetMissing: return 25
+      case .strategyRevisionConflict: return 26
+      case .sourceMarkdownConflict: return 27
+      case .storeEpochMismatch: return 28
+      case .outcomeUnknown: return 29
+      case .queueOwnershipTransition: return 30
+      case .operationFailed: return 31
+      case .invalidEnvelope: return 32
       case .UNRECOGNIZED(let i): return i
       }
     }
@@ -192,6 +267,30 @@ public nonisolated struct AppDaemonErrorDetails: Sendable {
       .unavailable,
       .resourceExhausted,
       .deadlineExceeded,
+      .storeOpenFailed,
+      .storeSqlite,
+      .pageNotFound,
+      .chatNotFound,
+      .sourceNotFound,
+      .sourceVersionNotFound,
+      .sourceMarkdownVersionNotFound,
+      .noProcessedMarkdown,
+      .deletionRestricted,
+      .invalidBookmarkRow,
+      .invalidRendererEventID,
+      .storeUnexpected,
+      .duplicateContent,
+      .duplicateURL,
+      .pageConflict,
+      .pageCreateConflict,
+      .pageExpectedTargetMissing,
+      .strategyRevisionConflict,
+      .sourceMarkdownConflict,
+      .storeEpochMismatch,
+      .outcomeUnknown,
+      .queueOwnershipTransition,
+      .operationFailed,
+      .invalidEnvelope,
     ]
 
   }
@@ -314,5 +413,5 @@ nonisolated extension AppDaemonErrorDetails: SwiftProtobuf.Message, SwiftProtobu
 }
 
 nonisolated extension AppDaemonErrorDetails.Code: SwiftProtobuf._ProtoNameProviding {
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0CODE_UNSPECIFIED\0\u{1}CODE_INVALID_REQUEST\0\u{1}CODE_UNAUTHENTICATED\0\u{1}CODE_CAPABILITY_MISMATCH\0\u{1}CODE_RESYNC_REQUIRED\0\u{1}CODE_WIKI_NOT_FOUND\0\u{1}CODE_UNAVAILABLE\0\u{1}CODE_RESOURCE_EXHAUSTED\0\u{1}CODE_DEADLINE_EXCEEDED\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0CODE_UNSPECIFIED\0\u{1}CODE_INVALID_REQUEST\0\u{1}CODE_UNAUTHENTICATED\0\u{1}CODE_CAPABILITY_MISMATCH\0\u{1}CODE_RESYNC_REQUIRED\0\u{1}CODE_WIKI_NOT_FOUND\0\u{1}CODE_UNAVAILABLE\0\u{1}CODE_RESOURCE_EXHAUSTED\0\u{1}CODE_DEADLINE_EXCEEDED\0\u{1}CODE_STORE_OPEN_FAILED\0\u{1}CODE_STORE_SQLITE\0\u{1}CODE_PAGE_NOT_FOUND\0\u{1}CODE_CHAT_NOT_FOUND\0\u{1}CODE_SOURCE_NOT_FOUND\0\u{1}CODE_SOURCE_VERSION_NOT_FOUND\0\u{1}CODE_SOURCE_MARKDOWN_VERSION_NOT_FOUND\0\u{1}CODE_NO_PROCESSED_MARKDOWN\0\u{1}CODE_DELETION_RESTRICTED\0\u{1}CODE_INVALID_BOOKMARK_ROW\0\u{1}CODE_INVALID_RENDERER_EVENT_ID\0\u{1}CODE_STORE_UNEXPECTED\0\u{1}CODE_DUPLICATE_CONTENT\0\u{1}CODE_DUPLICATE_URL\0\u{1}CODE_PAGE_CONFLICT\0\u{1}CODE_PAGE_CREATE_CONFLICT\0\u{1}CODE_PAGE_EXPECTED_TARGET_MISSING\0\u{1}CODE_STRATEGY_REVISION_CONFLICT\0\u{1}CODE_SOURCE_MARKDOWN_CONFLICT\0\u{1}CODE_STORE_EPOCH_MISMATCH\0\u{1}CODE_OUTCOME_UNKNOWN\0\u{1}CODE_QUEUE_OWNERSHIP_TRANSITION\0\u{1}CODE_OPERATION_FAILED\0\u{1}CODE_INVALID_ENVELOPE\0")
 }
