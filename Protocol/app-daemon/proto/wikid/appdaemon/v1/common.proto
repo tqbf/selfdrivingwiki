@@ -51,6 +51,18 @@ message PageId {
   string value = 1;
 }
 
+// A source identity (rows in `sources`): its own namespace. Raw value is
+// the compatibility ULID string.
+message SourceId {
+  string value = 1;
+}
+
+// A chat identity: its own namespace. Raw value is the compatibility ULID
+// string (the daemon-side ChatID type shares this representation).
+message ChatId {
+  string value = 1;
+}
+
 // Versioned error details carried in gRPC status details on every failure
 // this contract produces. Stable enum codes: the NUMERIC values are the
 // compatibility contract — never renumber, never reuse a retired code, only

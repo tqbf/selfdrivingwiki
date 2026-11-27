@@ -1,0 +1,345 @@
+// Queue family (step 2, plans/app-daemon-wire-contract.md §"Queue family
+// design"). Unary workload RPCs replacing the QueueRPCWire JSON envelope.
+// The completion subscription replaces the blocking waitForCompletion;
+// queue events hang off SubscribeEvents at EVENT_FAMILY_QUEUE in step 3.
+//
+// Wire vocabulary:
+// - Queue ownership is distinct from the daemon instance and any delivery
+//   position. QueueOwnershipEpoch is a daemon mutation/ownership guard.
+// - Report loads preserve loaded / not_reported / unavailable arms — an
+//   unavailable report is domain data, not an RPC failure.
+syntax = "proto3";
+
+package wikid.appdaemon.v1;
+
+import "google/protobuf/timestamp.proto";
+import "wikid/appdaemon/v1/common.proto";
+
+option swift_prefix = "AppDaemon";
+
+// Queue identity: one ULID per work item.
+message QueueItemId {
+  string value = 1;
+}
+
+// Ownership epoch over uint64: daemon-assigned, monotonic within one
+// daemon process lifetime.
+message QueueOwnershipEpoch {
+  uint64 value = 1;
+}
+
+enum QueueHostState {
+  QUEUE_HOST_STATE_UNSPECIFIED = 0;
+  QUEUE_HOST_STATE_SERVING = 1;
+  QUEUE_HOST_STATE_RELINQUISHING = 2;
+  QUEUE_HOST_STATE_RELINQUISHED = 3;
+  QUEUE_HOST_STATE_SHUTDOWN_BLOCKED = 4;
+}
+
+// Carried on queue replies that replace the legacy versioned envelope.
+message QueueOwnership {
+  QueueOwnershipEpoch epoch = 1;
+  QueueHostState host_state = 2;
+}
+
+// The two canonical queues. Values are stable; only append.
+enum QueueKind {
+  QUEUE_KIND_UNSPECIFIED = 0;
+  QUEUE_KIND_INGESTION = 1;
+  QUEUE_KIND_TRANSCRIPTION = 2;
+}
+
+// Item lifecycle. Values are stable; only append. Receivers map unknown
+// numeric values to UNSPECIFIED and fail typed.
+enum QueueItemState {
+  QUEUE_ITEM_STATE_UNSPECIFIED = 0;
+  QUEUE_ITEM_STATE_QUEUED = 1;
+  QUEUE_ITEM_STATE_RUNNING = 2;
+  QUEUE_ITEM_STATE_COMPLETED = 3;
+  QUEUE_ITEM_STATE_FAILED = 4;
+  QUEUE_ITEM_STATE_CANCELLED = 5;
+}
+
+message QueueSnapshotRequest {
+  // Intentionally empty; future filters under new field numbers.
+  reserved 1 to 16;
+}
+
+// One ordered row of the queue snapshot. Ordering is the daemon's
+// authoritative active/recent order.
+message QueueSnapshotRow {
+  QueueItemId item_id = 1;
+  QueueKind kind = 2;
+  QueueItemState state = 3;
+  // Zero-based position within the snapshot's active ordering.
+  uint64 order = 4;
+  uint64 attempt = 5;
+  WikiId wiki_id = 6;
+  google.protobuf.Timestamp enqueued_at = 7;
+  // Present when the item has started running.
+  optional google.protobuf.Timestamp started_at = 8;
+  // Present for terminal items.
+  optional google.protobuf.Timestamp finished_at = 9;
+  // Present when the item failed or was cancelled; the safe summary.
+  optional string failure_summary = 10;
+}
+
+message GetQueueSnapshotReply {
+  QueueOwnership ownership = 1;
+  repeated QueueSnapshotRow rows = 2;
+}
+
+// Typed payload projections. The legacy wire carried nested JSON; these
+// messages project the same fields with explicit presence.
+
+// Ingestion payload: which source (or new content) the item processes,
+// with an optional lint selection. Present `lint_selection` with an empty
+// `page_ids` list means whole-wiki lint; absence means normal ingestion.
+message IngestionPayload {
+  enum Source {
+    SOURCE_UNSPECIFIED = 0;
+    // Process an existing source.
+    SOURCE_EXISTING = 1;
+    // Inline new content for the page named by `page_id`.
+    SOURCE_NEW_CONTENT = 2;
+  }
+
+  Source source = 1;
+  WikiId wiki_id = 2;
+  // Present for SOURCE_EXISTING and SOURCE_NEW_CONTENT.
+  optional PageId page_id = 3;
+  optional SourceId source_id = 4;
+  // Present for SOURCE_NEW_CONTENT: the staged or inline content handle.
+  optional bytes content = 5;
+  optional string title = 6;
+
+  message LintSelection {
+    // Empty list = whole-wiki lint.
+    repeated PageId page_ids = 1;
+  }
+  optional LintSelection lint_selection = 7;
+}
+
+// Transcription payload for the transcription queue.
+message TranscriptionPayload {
+  WikiId wiki_id = 1;
+  SourceId source_id = 2;
+  // Provider-defined job reference; opaque to the client.
+  optional string job_reference = 3;
+}
+
+message EnqueueItemRequest {
+  WikiId wiki_id = 1;
+  QueueKind kind = 2;
+  // Exactly one payload arm; unset is INVALID_REQUEST.
+  oneof payload {
+    IngestionPayload ingestion = 3;
+    TranscriptionPayload transcription = 4;
+  }
+  // Optional dedupe key preserving existing enqueue semantics.
+  optional string dedupe_key = 5;
+}
+
+message EnqueueItemReply {
+  QueueItemId item_id = 1;
+  QueueOwnership ownership = 2;
+}
+
+message CancelItemRequest {
+  QueueItemId item_id = 1;
+}
+
+message CancelItemReply {
+  QueueOwnership ownership = 1;
+}
+
+message CancelAllInFlightRequest {
+  WikiId wiki_id = 1;
+}
+
+message CancelAllInFlightReply {
+  // Affected item count; zero is a success, not a failure.
+  uint64 cancelled = 1;
+  QueueOwnership ownership = 2;
+}
+
+message RetryItemRequest {
+  QueueItemId item_id = 1;
+}
+
+message RetryItemReply {
+  QueueOwnership ownership = 2;
+}
+
+message PauseQueueRequest {
+  QueueKind kind = 1;
+}
+
+message PauseQueueReply {
+  QueueOwnership ownership = 2;
+}
+
+message ResumeQueueRequest {
+  QueueKind kind = 1;
+}
+
+message ResumeQueueReply {
+  QueueOwnership ownership = 2;
+}
+
+message HaltQueueRequest {
+  QueueKind kind = 1;
+}
+
+message HaltQueueReply {
+  // Halt is distinct from pause: it drops live work. The reply carries
+  // the affected live-work count for confirmation.
+  uint64 halted = 1;
+  QueueOwnership ownership = 2;
+}
+
+message ReorderItemRequest {
+  QueueItemId item_id = 1;
+  // Absent = move to the front of the queue.
+  optional QueueItemId before_item_id = 2;
+}
+
+message ReorderItemReply {
+  QueueOwnership ownership = 3;
+}
+
+message HasActiveWorkRequest {
+  WikiId wiki_id = 1;
+}
+
+message HasActiveWorkReply {
+  bool active = 1;
+}
+
+// Transcript rows mirror the durable transcript the app reads; typed
+// fields replace the legacy JSON projection.
+message QueueTranscriptRow {
+  enum Role {
+    ROLE_UNSPECIFIED = 0;
+    ROLE_USER = 1;
+    ROLE_ASSISTANT = 2;
+    ROLE_TOOL = 3;
+    ROLE_SYSTEM = 4;
+  }
+
+  Role role = 1;
+  // Present for assistant/tool rows that name a tool.
+  optional string tool_name = 2;
+  // Body content; may be large (see the family bounds note).
+  string body = 3;
+  google.protobuf.Timestamp created_at = 4;
+}
+
+message LoadQueueTranscriptRequest {
+  QueueItemId item_id = 1;
+}
+
+message LoadQueueTranscriptReply {
+  repeated QueueTranscriptRow rows = 1;
+}
+
+// Activity snapshot rows: bounded typed projections of the legacy
+// per-queue activity reads.
+message QueueActivityRow {
+  QueueItemId item_id = 1;
+  QueueKind kind = 2;
+  QueueItemState state = 3;
+  optional string title = 4;
+  optional string detail = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+message LoadQueueActivitySnapshotsRequest {
+  reserved 1 to 16;
+}
+
+message LoadQueueActivitySnapshotsReply {
+  repeated QueueActivityRow rows = 1;
+}
+
+message LoadQueueReportRequest {
+  QueueItemId item_id = 1;
+}
+
+// Report content: typed fields replacing the legacy JSON report.
+message QueueReport {
+  QueueItemId item_id = 1;
+  uint64 attempt = 2;
+  google.protobuf.Timestamp started_at = 3;
+  optional google.protobuf.Timestamp finished_at = 4;
+  // Sections are ordered and complete; a missing section is absent data,
+  // not an error.
+  repeated QueueReportSection sections = 5;
+}
+
+message QueueReportSection {
+  string title = 1;
+  string body = 2;
+}
+
+message LoadQueueReportReply {
+  oneof outcome {
+    QueueReport loaded = 1;
+    // The item completed without producing a report.
+    NotReported not_reported = 2;
+    // The report store could not serve the item right now.
+    Unavailable unavailable = 3;
+  }
+
+  message NotReported {
+    reserved 1 to 16;
+  }
+
+  message Unavailable {
+    reserved 1 to 16;
+  }
+}
+
+message LoadQueueReportSummariesRequest {
+  // Bounded batch (see the family bounds note); oversize batches fail
+  // INVALID_REQUEST rather than truncating.
+  repeated QueueItemId item_ids = 1;
+}
+
+message QueueReportSummary {
+  QueueItemId item_id = 1;
+  // Present when a summary exists; absent means not_reported.
+  optional string summary = 2;
+  optional google.protobuf.Timestamp updated_at = 3;
+}
+
+message LoadQueueReportSummariesReply {
+  // Pairs for the requested items that resolved; items that did not
+  // resolve are absent, mirroring the legacy partial-match behavior.
+  repeated QueueReportSummary summaries = 1;
+}
+
+message GetQueueOwnershipStatusRequest {
+  reserved 1 to 16;
+}
+
+message GetQueueOwnershipStatusReply {
+  QueueOwnership ownership = 1;
+}
+
+message RelinquishQueueRequest {
+  // The caller's expected epoch; a stale epoch fails
+  // CODE_QUEUE_OWNERSHIP_TRANSITION.
+  QueueOwnershipEpoch expected_epoch = 1;
+}
+
+message RelinquishQueueReply {
+  // The epoch at completed relinquishment.
+  QueueOwnershipEpoch completed_epoch = 1;
+}
+
+// Active item blockers on a shutdown-blocked transition: the typed
+// WorkloadErrorContext arm carries these.
+message QueueActiveItems {
+  repeated QueueItemId item_ids = 1;
+}
