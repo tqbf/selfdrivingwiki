@@ -191,9 +191,18 @@ pub fn unpack_details(status: &tonic::Status) -> Option<v1::ErrorDetails> {
     for bytes in candidates {
         if let Ok(rpc_status) = RpcStatus::decode(bytes.as_slice()) {
             for detail in rpc_status.details {
-                if detail.type_url.ends_with("wikid.appdaemon.v1.ErrorDetails") {
+                // Exact final component match: a suffix match would accept
+                // a DIFFERENT contract's ErrorDetails (v2 package, etc.).
+                if detail.type_url
+                    == "type.googleapis.com/wikid.appdaemon.v1.ErrorDetails"
+                {
                     if let Ok(details) = v1::ErrorDetails::decode(detail.value.as_slice()) {
-                        return Some(details);
+                        // Semantics version 1 is the only one this peer's
+                        // code mapping understands; skip foreign versions
+                        // rather than guessing their numeric codes.
+                        if details.version == 1 {
+                            return Some(details);
+                        }
                     }
                 }
             }

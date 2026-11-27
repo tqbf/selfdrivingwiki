@@ -70,10 +70,9 @@ struct AppDaemonProtoCoverageTests {
                 provider.contains("func \(handler)("),
                 "schema RPC \(rpc) has no daemon-side provider handler \(handler)")
             // Client path: the generated stub is reached from the session
-            // client through either a direct wrapper or the bootstrap
-            // handshake; the generated bindings file must carry the method.
+            // client (workload wrappers AND the admission handshake).
             #expect(
-                client.contains("stub.\(handler)") || rpc == "AdmitSession",
+                client.contains("stub.\(handler)"),
                 "client session must route \(rpc) through the typed stub")
             // Corpus family: admission/capabilities ride the live round
             // trip; registry read and events have explicit corpus cases.

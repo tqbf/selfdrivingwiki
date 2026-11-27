@@ -36,7 +36,6 @@ public final class DaemonRegistryEventHub: @unchecked Sendable {
             self.continuation = continuation
         }
     }
-
     private let lock = NSLock()
     private var subscribers: [UUID: Subscriber] = [:]
     private var sequence: UInt64 = 0
@@ -48,38 +47,54 @@ public final class DaemonRegistryEventHub: @unchecked Sendable {
         lock.withLock { subscribers.count }
     }
 
-    /// Subscribe. Yields stamped events; a `nil` element is the termination
-    /// sentinel (revocation, shutdown, or a later hub close). The caller MUST
-    /// consume; the provider's forwarding-loop bound is what detects a stuck
-    /// consumer and fails the stream typed.
-    public func subscribe() -> AsyncStream<AppDaemonDaemonEvent?> {
+    /// Subscribe. Returns the stream plus the subscription's id — the id
+    /// the caller must present to ``close(subscriptionID:)`` (session
+    /// revocation routes through it). A `nil` stream element is the
+    /// termination sentinel (revocation, shutdown, or a later hub close).
+    /// The caller MUST consume; the bounded buffer plus ``publish``'s
+    /// yield-result check enforce the overflow contract (a buffer-full
+    /// subscriber's stream ENDS without the sentinel, which the provider
+    /// maps to the typed resync failure).
+    public func subscribe() -> (id: UUID, stream: AsyncStream<AppDaemonDaemonEvent?>) {
         let (stream, continuation) = AsyncStream<AppDaemonDaemonEvent?>.makeStream(
-            bufferingPolicy: .unbounded)
+            // .bufferingOldest is the observable-overflow policy: when the
+            // buffer is full, `yield` returns .dropped (the NEW event is
+            // not silently accepted), which publish() maps to ending the
+            // subscriber's stream — typed resync at the provider.
+            bufferingPolicy: .bufferingOldest(Self.perSubscriberBufferBound))
         let subscriber = Subscriber(continuation: continuation)
         lock.lock()
         subscribers[subscriber.id] = subscriber
+        let id = subscriber.id
         lock.unlock()
 
+        // Capture the ID, not the subscriber: termination must not keep
+        // the subscriber (and its continuation) alive.
         continuation.onTermination = { [weak self] _ in
             guard let self else { return }
             self.lock.lock()
-            self.subscribers.removeValue(forKey: subscriber.id)
+            self.subscribers.removeValue(forKey: id)
             self.lock.unlock()
         }
-        return stream
+        return (id: id, stream: stream)
     }
 
-    /// Publish one registry mutation. Stamps the daemon-wide sequence and
-    /// delivers to every subscriber. The wiki id is the raw ULID string (the
-    /// hub stays domain-free; callers adapt their typed ids at the edge).
-    public func publish(kind: DaemonRegistryEventKind, wikiIDRawValue: String, displayName: String?) {
-        lock.lock()
-        sequence += 1
-        let stamped = sequence
-        lock.unlock()
+    /// Per-subscriber buffer bound, enforced by the continuation's own
+    /// bounded policy — ``publish`` observes the yield result and ends a
+    /// buffer-full subscriber's stream WITHOUT the revocation sentinel,
+    /// which is how the provider distinguishes overflow (typed resync
+    /// failure) from revocation (plain end).
+    static let perSubscriberBufferBound = 256
 
+    /// Publish one registry mutation. Stamps the daemon-wide sequence and
+    /// delivers to every subscriber. The stamp+yield pair runs under the
+    /// lock so concurrent publishers cannot deliver sequence N+1 before
+    /// N (yield is non-blocking and never re-enters this lock). A yield
+    /// into a FULL bounded buffer ends that subscriber's stream — the
+    /// provider loop sees the termination sentinel and fails the RPC
+    /// typed (RESYNC_REQUIRED); no event is silently dropped.
+    public func publish(kind: DaemonRegistryEventKind, wikiIDRawValue: String, displayName: String?) {
         let event = AppDaemonDaemonEvent.with {
-            $0.sequence = stamped
             $0.registry = AppDaemonRegistryEvent.with {
                 $0.kind = AppDaemonRegistryEvent.Kind(kind)
                 $0.wikiID = .with { $0.value = wikiIDRawValue }
@@ -90,11 +105,25 @@ public final class DaemonRegistryEventHub: @unchecked Sendable {
         }
 
         lock.lock()
+        sequence += 1
+        var stamped = event
+        stamped.sequence = sequence
         let targets = Array(subscribers.values)
-        lock.unlock()
         for subscriber in targets {
-            subscriber.continuation.yield(event)
+            let result = subscriber.continuation.yield(stamped)
+            if case .terminated = result {
+                // The consumer already went away; onTermination removed it.
+                continue
+            }
+            if case .dropped = result {
+                // The bounded buffer is full: end this subscriber's stream
+                // WITHOUT the revocation sentinel — the provider maps a
+                // sentinel-free end to the typed resync failure.
+                subscriber.continuation.finish()
+                subscribers.removeValue(forKey: subscriber.id)
+            }
         }
+        lock.unlock()
     }
 
     /// End every subscriber stream (daemon shutdown / listener stop). Plain

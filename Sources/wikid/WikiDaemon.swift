@@ -2089,15 +2089,19 @@ final class WikiDaemon: @unchecked Sendable {
     /// The XPC admission reply for one connection (JSON
     /// `DaemonGRPCAdmissionReply`). Answers the versioned
     /// `endpointAvailable == false` reply when no coordinator is installed.
-    /// The bootstrap credential rides only in this reply — never logged.
-    func grpcAdmissionData(connectionID: String) async -> Data {
+    /// `connectionIsLive` runs at mint time (see the coordinator). The
+    /// bootstrap credential rides only in this reply — never logged.
+    func grpcAdmissionData(
+        connectionID: String, connectionIsLive: @escaping @Sendable () -> Bool
+    ) async -> Data {
         let coordinator = queue.sync { grpcCoordinator }
         guard let coordinator else {
             return (DebugLog.trying("JSONEncoder.encode", operation: {
                 try JSONEncoder().encode(DaemonGRPCAdmissionReply.unavailable())
             })) ?? Data()
         }
-        return await coordinator.admissionReply(connectionID: connectionID)
+        return await coordinator.admissionReply(
+            connectionID: connectionID, connectionIsLive: connectionIsLive)
     }
 
     /// XPC invalidation for one connection: revoke its gRPC session

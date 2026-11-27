@@ -196,6 +196,17 @@ cmd_check() {
   local negative="$TOOLS_DIR/negative-schema"
   rm -rf "$negative"; mkdir -p "$negative"
   cp -R "$PROTO_DIR/proto/." "$negative/"
+
+  # Positive control FIRST: the same temp-schema invocation on an UNCHANGED
+  # copy must SUCCEED, proving the failure below comes from the edit.
+  local positive="$TOOLS_DIR/positive-schema"
+  rm -rf "$positive"; mkdir -p "$positive"
+  cp -R "$PROTO_DIR/proto/." "$positive/"
+  if ! (cd "$positive/.." && "$TOOLS_DIR/bin/buf" breaking "$positive" --against "$BASELINE" >/dev/null 2>&1); then
+    fail "positive control failed: buf rejected an UNCHANGED schema copy (baseline/config mismatch)"
+  fi
+  log "positive control: unchanged copy passes"
+
   # Remove home_page_id from the registry descriptor WITHOUT reserving the
   # number/name — the canonical breaking edit the check must reject.
   python3 - "$negative/wikid/appdaemon/v1/registry.proto" <<'PYEOF'
@@ -212,7 +223,7 @@ PYEOF
   if (cd "$negative/.." && "$TOOLS_DIR/bin/buf" breaking "$negative" --against "$BASELINE" >/dev/null 2>&1); then
     fail "negative test failed: buf accepted a breaking edit (removed field without reservation)"
   fi
-  rm -rf "$negative"
+  rm -rf "$negative" "$positive"
   log "negative test: correctly rejected"
 
   log "== check-app-daemon-proto: ALL PASSED"

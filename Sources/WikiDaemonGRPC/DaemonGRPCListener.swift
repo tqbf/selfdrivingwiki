@@ -202,46 +202,62 @@ public final class DaemonGRPCListener: @unchecked Sendable {
             message: "gRPC endpoint did not become ready within \(timeout)")
     }
 
-    /// Terminal teardown. Idempotent; the instance cannot restart afterwards.
-    /// Order: stop accepting (cancel task) → await the serving loop's exit →
-    /// revoke sessions + close streams (the onShutdown hook) → unlink the
-    /// socket under the guard → release the flock. Locking stays out of async
-    /// contexts (NSLock is unavailable there) — the state transitions are
-    /// synchronous helpers.
+    /// Terminal teardown. Idempotent AND joinable: every caller awaits the
+    /// same teardown. Order per the contract: stop accepting (cancel task)
+    /// → revoke sessions + close streams (the onShutdown hook) → await the
+    /// serving loop's exit → unlink the socket under the guard → release
+    /// the flock. Locking stays out of async contexts — the state
+    /// transition is a synchronous helper.
     public func stop() async {
-        guard let task = transitionToStopped() else { return }
-
-        task.cancel()
-        _ = await task.result
-        await onShutdown()
-
-        let guardFD = takeGuardFD()
-        if FileManager.default.fileExists(atPath: socketPath) {
-            // Best-effort unlink under the guard: a leftover file is
-            // next-start's stale fuel, so failing to remove one is logged
-            // but not fatal to shutdown.
-            do {
-                try FileManager.default.removeItem(atPath: socketPath)
-            } catch {
-                DebugLog.store(
-                    "wikid: could not unlink gRPC socket \(socketPath): \(error)")
-            }
-        }
-        if guardFD >= 0 { close(guardFD) } // releases the flock
+        guard let teardown = beginTeardown() else { return }
+        await teardown.value
     }
 
     /// The synchronous phase transition behind ``stop``: `.running` →
-    /// `.stopped`, returning the serving task to cancel+await. Returns nil
-    /// when the listener was never started or is already stopped.
-    private func transitionToStopped() -> Task<Void, Never>? {
+    /// `.stopped`, creating (once) and returning the teardown task. Returns
+    /// the EXISTING teardown on repeat calls, so concurrent stoppers join
+    /// instead of racing.
+    private func beginTeardown() -> Task<Void, Never>? {
         stateLock.lock()
         defer { stateLock.unlock() }
+        if let stopTask { return stopTask }
         guard state == .running else { return nil }
         state = .stopped
-        let task = serverTask
+        let servingTask = serverTask
         serverTask = nil
-        return task
+        let failureBox = serverFailure
+        let socketPath = socketPath
+        let onShutdown = onShutdown
+        let teardown = Task<Void, Never> { [weak self] in
+            // 1. Stop accepting.
+            servingTask?.cancel()
+            // 2. Revoke sessions + close streams BEFORE awaiting the
+            //    serving loop's exit (the contract's ordering).
+            await onShutdown()
+            // 3. Await the serving loop's exit.
+            _ = await servingTask?.result
+            _ = failureBox
+            // 4. Unlink under the guard; 5. release the flock.
+            guard let self else { return }
+            if FileManager.default.fileExists(atPath: socketPath) {
+                // Best-effort unlink under the guard: a leftover file is
+                // next-start's stale fuel, logged but not fatal to shutdown.
+                do {
+                    try FileManager.default.removeItem(atPath: socketPath)
+                } catch {
+                    DebugLog.store(
+                        "wikid: could not unlink gRPC socket \(socketPath): \(error)")
+                }
+            }
+            let guardFD = self.takeGuardFD()
+            if guardFD >= 0 { close(guardFD) } // releases the flock
+        }
+        stopTask = teardown
+        return teardown
     }
+
+    /// The memoized teardown task (nil until the first stop()).
+    private var stopTask: Task<Void, Never>?
 
     private func takeGuardFD() -> Int32 {
         stateLock.lock()

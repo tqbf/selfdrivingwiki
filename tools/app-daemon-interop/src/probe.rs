@@ -166,6 +166,19 @@ pub async fn run(args: ProbeArgs) -> Result<(), String> {
             let details = corpus::unpack_details(&status).ok_or(
                 "error status carries no decodable ErrorDetails",
             )?;
+            // The typed CODE is the dispatch key — verify it explicitly,
+            // not just the prose fields around it.
+            check(
+                details.code == details_code_of(error.details_code.as_str())?,
+                format!(
+                    "details code mismatch: got {}, want {}",
+                    details.code, error.details_code
+                ),
+            )?;
+            check(
+                details.version == 1,
+                format!("details version mismatch: got {}", details.version),
+            )?;
             check(
                 details.message == error.message,
                 format!(
@@ -352,6 +365,21 @@ fn grpc_code_of(name: &str) -> Result<tonic::Code, String> {
         "Unauthenticated" => Ok(tonic::Code::Unauthenticated),
         "DeadlineExceeded" => Ok(tonic::Code::DeadlineExceeded),
         other => Err(format!("unknown corpus grpcCode '{other}'")),
+    }
+}
+
+fn details_code_of(name: &str) -> Result<i32, String> {
+    use crate::proto::error_details::Code;
+    match name {
+        "INVALID_REQUEST" => Ok(Code::InvalidRequest as i32),
+        "UNAUTHENTICATED" => Ok(Code::Unauthenticated as i32),
+        "CAPABILITY_MISMATCH" => Ok(Code::CapabilityMismatch as i32),
+        "RESYNC_REQUIRED" => Ok(Code::ResyncRequired as i32),
+        "WIKI_NOT_FOUND" => Ok(Code::WikiNotFound as i32),
+        "UNAVAILABLE" => Ok(Code::Unavailable as i32),
+        "RESOURCE_EXHAUSTED" => Ok(Code::ResourceExhausted as i32),
+        "DEADLINE_EXCEEDED" => Ok(Code::DeadlineExceeded as i32),
+        other => Err(format!("unknown corpus detailsCode '{other}'")),
     }
 }
 

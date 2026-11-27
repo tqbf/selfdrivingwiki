@@ -63,13 +63,27 @@ public final class AppDaemonSessionClient: @unchecked Sendable {
     private let stub: AppDaemonAppDaemon.Client<HTTP2ClientTransport.Posix>
     private let runTask: Task<Void, Never>
 
-    /// Lock-guarded session state. Locking stays out of async contexts —
-    /// sync helpers only (NSLock is unavailable from async bodies).
+    /// Lock-guarded session state. The bearer + instance id publish
+    /// ATOMICALLY, only after the full handshake (exchange + capabilities
+    /// verification) succeeds — workload calls can never use an unverified
+    /// bearer, and `authenticatedInstanceID` reflects what the handshake
+    /// proved. Locking stays out of async contexts — sync helpers only.
     private let lock = NSLock()
-    private var bearerHex: String?
+    private var session: SessionState?
+    /// Live subscription tasks; close() cancels them (graceful shutdown
+    /// alone does not terminate an open server stream).
+    private var subscriptionTasks: [Task<Void, Never>] = []
 
-    /// The instance id the session authenticated against.
-    public private(set) var authenticatedInstanceID: String?
+    private struct SessionState {
+        let bearerHex: String
+        let instanceID: String
+    }
+
+    /// The instance id the session authenticated against (nil before the
+    /// handshake completed).
+    public var authenticatedInstanceID: String? {
+        lock.withLock { session?.instanceID }
+    }
 
     public init(admission: AppDaemonAdmission) throws {
         self.admission = admission
@@ -99,9 +113,13 @@ public final class AppDaemonSessionClient: @unchecked Sendable {
         client.beginGracefulShutdown()
     }
 
-    /// End the session client-side (reconnect path). Stops opening new
-    /// connections; in-flight calls wind down with their own outcomes.
+    /// End the session client-side (reconnect path). Cancels owned
+    /// subscription streams FIRST (graceful shutdown does not terminate an
+    /// open server stream), then stops opening new connections.
     public func close() {
+        let tasks = lock.withLock { subscriptionTasks }
+        for task in tasks { task.cancel() }
+        lock.withLock { subscriptionTasks = [] }
         client.beginGracefulShutdown()
     }
 
@@ -109,18 +127,28 @@ public final class AppDaemonSessionClient: @unchecked Sendable {
     /// within the bootstrap window (the server returns the same bearer), so
     /// a dropped reply can be re-attempted inside the window.
     public func bootstrap() async throws {
-        let sessionCredential = try await admitSession()
-        storeBearer(sessionCredential)
+        // The candidate bearer stays private until verification passes:
+        // workload calls can never use an unverified bearer, and a failed
+        // handshake leaves the session state untouched.
+        let candidateBearer = try await admitSession()
 
-        let capabilities = try await getCapabilities()
-        try Self.verifyCapabilities(capabilities, expectedInstance: admission.daemonInstanceID)
-        authenticatedInstanceID = capabilities.daemonInstanceID
+        let capabilities = try await getCapabilities(bearer: candidateBearer)
+        try Self.verifyCapabilities(
+            capabilities,
+            expectedInstance: admission.daemonInstanceID,
+            advertisedInstance: capabilities.daemonInstanceID)
+
+        lock.withLock {
+            session = SessionState(
+                bearerHex: candidateBearer,
+                instanceID: capabilities.daemonInstanceID)
+        }
     }
 
     /// List the wiki registry (MRU-ordered). The client's authoritative
     /// baseline read for the registry family.
     public func listWikis() async throws -> AppDaemonListWikisReply {
-        let bearer = try requireBearer()
+        let bearer = try requireBearerSync()
         return try await withDeadline(Deadlines.unary) { options in
             try await self.stub.listWikis(
                 request: ClientRequest(
@@ -162,11 +190,32 @@ public final class AppDaemonSessionClient: @unchecked Sendable {
                                 throw Self.typed(rpcError)
                             case .success(let contents):
                                 for try await part in contents.bodyParts {
-                                    if case .message(let event) = part,
-                                       let registry = event.event,
-                                       case .registry(let registryEvent) = registry {
-                                        continuation.yield(registryEvent)
+                                    guard case .message(let event) = part else {
+                                        continue
                                     }
+                                    // Exhaustive oneof dispatch (semantic
+                                    // rule 6): an unknown future variant is
+                                    // a typed failure, never a silent drop.
+                                    guard let payload = event.event,
+                                          case .registry(let registryEvent) = payload
+                                    else {
+                                        throw AppDaemonFailure(
+                                            code: .invalidRequest,
+                                            message: "Unknown event variant; "
+                                                + "resync from authoritative state")
+                                    }
+                                    // Unknown numeric KIND (semantic rule 3):
+                                    // the receiver must not guess — the typed
+                                    // failure sends the caller back to
+                                    // authoritative state.
+                                    if registryEvent.kind == .unspecified
+                                        || registryEvent.kind == .UNRECOGNIZED(0) {
+                                        throw AppDaemonFailure(
+                                            code: .invalidRequest,
+                                            message: "Unknown registry event kind; "
+                                                + "resync from authoritative state")
+                                    }
+                                    continuation.yield(registryEvent)
                                 }
                             }
                     }
@@ -175,9 +224,20 @@ public final class AppDaemonSessionClient: @unchecked Sendable {
                     continuation.finish(throwing: Self.typed(error))
                 }
             }
-            continuation.onTermination = { _ in
+            // Registered so close() cancels this stream (graceful transport
+            // shutdown does not terminate an open RPC), and so a finished
+            // task stops pinning memory.
+            self.lock.withLock { self.subscriptionTasks.append(task) }
+            continuation.onTermination = { [weak self] _ in
                 task.cancel()
+                self?.forgetSubscription(task)
             }
+        }
+    }
+
+    private func forgetSubscription(_ task: Task<Void, Never>) {
+        lock.withLock {
+            subscriptionTasks.removeAll { $0 == task }
         }
     }
 
@@ -195,8 +255,7 @@ public final class AppDaemonSessionClient: @unchecked Sendable {
         }
     }
 
-    private func getCapabilities() async throws -> AppDaemonGetCapabilitiesReply {
-        let bearer = try requireBearer()
+    private func getCapabilities(bearer: String) async throws -> AppDaemonGetCapabilitiesReply {
         return try await withDeadline(Deadlines.handshake) { options in
             try await self.stub.getCapabilities(
                 request: ClientRequest(
@@ -206,22 +265,14 @@ public final class AppDaemonSessionClient: @unchecked Sendable {
         }
     }
 
-    private func requireBearer() throws -> String {
-        try requireBearerSync()
-    }
-
     /// Synchronous bearer read (NSLock is unavailable from async bodies).
     private func requireBearerSync() throws -> String {
-        let bearer = lock.withLock { bearerHex }
+        let bearer = lock.withLock { session?.bearerHex }
         guard let bearer else {
             throw AppDaemonFailure(
                 code: .unauthenticated, message: "bootstrap() has not completed")
         }
         return bearer
-    }
-
-    private func storeBearer(_ hex: String) {
-        lock.withLock { bearerHex = hex }
     }
 
     private func withDeadline<T>(
@@ -238,10 +289,20 @@ public final class AppDaemonSessionClient: @unchecked Sendable {
     }
 
     /// The capabilities gate, before any workload call: contract version,
-    /// daemon instance binding, and every capability this build requires.
+    /// daemon instance binding (the admission reply's instance id AND the
+    /// capabilities reply's must agree with each other and the admission),
+    /// and every capability this build requires.
     static func verifyCapabilities(
-        _ reply: AppDaemonGetCapabilitiesReply, expectedInstance: String
+        _ reply: AppDaemonGetCapabilitiesReply,
+        expectedInstance: String,
+        advertisedInstance: String
     ) throws {
+        guard advertisedInstance == expectedInstance else {
+            throw AppDaemonFailure(
+                code: .unauthenticated,
+                message: "Handshake instance mismatch: admission bound to "
+                    + "\(expectedInstance), capabilities answer for \(advertisedInstance)")
+        }
         guard reply.contractVersion == requiredContractVersion else {
             throw AppDaemonFailure(
                 code: .capabilityMismatch,

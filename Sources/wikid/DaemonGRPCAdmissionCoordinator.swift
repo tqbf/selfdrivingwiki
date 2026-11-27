@@ -35,10 +35,11 @@ final class DaemonGRPCAdmissionCoordinator: @unchecked Sendable {
     private let provider: AppDaemonServiceProvider
     private let listener: DaemonGRPCListener
     private let lock = NSLock()
-    /// The one-shot readiness gate; admission awaits this before answering.
-    /// Awaiting a Task's result repeatedly is safe — every admission call
-    /// waits out the same settled gate.
-    private let readiness: Task<Void, Never>
+    /// Whether readiness SUCCEEDED (nil while pending). Admission answers
+    /// the unavailable reply unless the listener VERIFIED ready — a failed
+    /// bind or a readiness timeout is never advertised as a serving
+    /// endpoint.
+    private var readinessSucceeded: Bool?
 
     private static let readinessTimeout: Duration = .seconds(10)
 
@@ -69,22 +70,50 @@ final class DaemonGRPCAdmissionCoordinator: @unchecked Sendable {
         self.provider = provider
         self.listener = listener
         try listener.start()
-        readiness = Task { [listener] in
+        readinessTask = Task { [weak self, listener] in
             do {
                 try await listener.waitUntilServing(timeout: Self.readinessTimeout)
+                self?.lock.withLock { self?.readinessSucceeded = true }
             } catch {
-                // The readiness result is read when admission is asked for;
-                // a failed bind keeps admission unavailable.
+                // A failed bind or readiness timeout keeps admission
+                // unavailable — never advertise a dead endpoint.
                 DebugLog.store("wikid: gRPC listener failed readiness: \(error)")
+                self?.lock.withLock { self?.readinessSucceeded = false }
             }
         }
     }
 
-    /// The XPC admission answer for one connection. Never logs credentials.
-    func admissionReply(connectionID: String) async -> Data {
-        _ = await readiness.result
+    private var readinessTask: Task<Void, Never>?
+
+    /// The XPC admission answer for one connection. Never logs
+    /// credentials. `connectionIsLive` runs at mint time under the store's
+    /// lock (see ``DaemonSessionStore/admissionOffer``) so an XPC
+    /// connection that died mid-admission cannot mint an orphan session.
+    func admissionReply(
+        connectionID: String, connectionIsLive: @escaping @Sendable () -> Bool
+    ) async -> Data {
+        // Wait out readiness, then require SUCCESS: a listener that never
+        // verified serving answers the unavailable reply.
+        while true {
+            let succeeded = lock.withLock { readinessSucceeded }
+            if let succeeded {
+                if !succeeded {
+                    return Self.unavailableReply()
+                }
+                break
+            }
+            do {
+                try await Task.sleep(for: .milliseconds(50))
+            } catch {
+                return Self.unavailableReply()
+            }
+        }
         let offer = store.admissionOffer(
-            socketPath: listener.socketPath, connectionID: connectionID)
+            socketPath: listener.socketPath, connectionID: connectionID,
+            livenessCheck: connectionIsLive)
+        guard let offer else {
+            return Self.unavailableReply()
+        }
         let reply = DaemonGRPCAdmissionReply(
             endpointAvailable: true,
             socketPath: offer.socketPath,
@@ -92,10 +121,15 @@ final class DaemonGRPCAdmissionCoordinator: @unchecked Sendable {
             daemonInstanceID: offer.daemonInstanceID,
             bootstrapValidForSeconds: Double(DaemonSessionStore.bootstrapLifetimeNanoseconds)
                 / 1_000_000_000)
-        let data = (DebugLog.trying("JSONEncoder.encode", operation: {
+        return (DebugLog.trying("JSONEncoder.encode", operation: {
             try JSONEncoder().encode(reply)
+        })) ?? Self.unavailableReply()
+    }
+
+    private static func unavailableReply() -> Data {
+        (DebugLog.trying("JSONEncoder.encode", operation: {
+            try JSONEncoder().encode(DaemonGRPCAdmissionReply.unavailable())
         })) ?? Data()
-        return data
     }
 
     /// XPC invalidation for one connection: revoke its session (idempotent)

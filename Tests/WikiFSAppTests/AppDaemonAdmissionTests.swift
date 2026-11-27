@@ -34,7 +34,10 @@ struct AppDaemonAdmissionTests {
         }
 
         // Continued service after the rejected bind.
-        let offer = harness.admissionOffer(connectionID: "after-raced-bind")
+        guard let offer = harness.admissionOffer(connectionID: "after-raced-bind") else {
+            Issue.record("admission refused")
+            return
+        }
         let client = try AppDaemonSessionClient(admission: offer.admission)
         defer { client.close() }
         try await client.bootstrap()
@@ -68,7 +71,10 @@ struct AppDaemonAdmissionTests {
         let harness = try await TestHarness.make()
         defer { harness.stopInBackground() }
 
-        let offer = harness.admissionOffer(connectionID: "round-trip-conn")
+        guard let offer = harness.admissionOffer(connectionID: "round-trip-conn") else {
+            Issue.record("admission refused")
+            return
+        }
         let client = try AppDaemonSessionClient(admission: offer.admission)
         defer { client.close() }
 
@@ -131,31 +137,55 @@ struct AppDaemonAdmissionTests {
         }
 
         // 2. Valid admission, then revocation: the bearer stops working and
-        // a live subscription dies.
-        let offer = harness.admissionOffer(connectionID: "revoked-conn")
+        // a LIVE subscription dies (liveness proven by an event FIRST — a
+        // watchdog timeout can no longer masquerade as the outcome).
+        guard let offer = harness.admissionOffer(connectionID: "revoked-conn") else {
+            Issue.record("admission refused")
+            return
+        }
         let client = try AppDaemonSessionClient(admission: offer.admission)
         defer { client.close() }
         try await client.bootstrap()
 
+        let liveStream = client.subscribeRegistryEvents()
+        let subscribeDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while harness.hub.subscriptionCount == 0
+            && ContinuousClock.now < subscribeDeadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        harness.hub.publish(
+            kind: .renamed,
+            wikiIDRawValue: TestHarness.fixtureWikiID,
+            displayName: "Renamed")
+        let live = try await Self.consumeFirstEvent(from: liveStream, timeout: .seconds(5))
+        #expect(live.kind == AppDaemonRegistryEvent.Kind.renamed)
+
+        // NOW revoke: the live stream must end (nil) or fail typed — the
+        // watchdog uses its own error type, so the two are distinguishable.
         harness.store.revokeSession(connectionID: "revoked-conn")
         do {
             _ = try await withThrowingTaskGroup(of: AppDaemonRegistryEvent?.self) { group in
                 group.addTask {
-                    var iterator = client.subscribeRegistryEvents().makeAsyncIterator()
+                    var iterator = liveStream.makeAsyncIterator()
                     return try await iterator.next()
                 }
                 group.addTask {
                     try await Task.sleep(for: .seconds(5))
-                    throw AppDaemonFailure(
-                        code: .deadlineExceeded, message: "no event within 5s")
+                    throw WatchdogTimeout()
                 }
-                let first = try await group.next() ?? nil
+                let first = (try await group.next()) ?? nil
                 group.cancelAll()
-                return first
+                // nil = clean server-side end (the revocation sentinel).
+                #expect(
+                    first == nil,
+                    "expected plain stream end on revocation, got \(String(describing: first))")
             }
-            Issue.record("revoked session's subscription must end or fail")
-        } catch is AppDaemonFailure {
-            // Typed failure is acceptable.
+        } catch is WatchdogTimeout {
+            Issue.record("revoked stream neither ended nor failed within 5s")
+        } catch let failure as AppDaemonFailure {
+            // A typed stream failure is also an acceptable outcome.
+            #expect(
+                failure.code == .unauthenticated || failure.code == .invalidRequest)
         } catch is CancellationError {
             // Plain end is acceptable.
         }
@@ -170,7 +200,10 @@ struct AppDaemonAdmissionTests {
         }
 
         // 3. Unserved family → typed invalidRequest before the stream.
-        let fresh = harness.admissionOffer(connectionID: "family-conn")
+        guard let fresh = harness.admissionOffer(connectionID: "family-conn") else {
+            Issue.record("admission refused")
+            return
+        }
         let familyClient = try AppDaemonSessionClient(admission: fresh.admission)
         defer { familyClient.close() }
         try await familyClient.bootstrap()
@@ -216,6 +249,10 @@ struct AppDaemonAdmissionTests {
         }
     }
 }
+
+/// The watchdog's OWN error, distinct from every RPC outcome so a timeout
+/// can never be mistaken for the behavior under test.
+private struct WatchdogTimeout: Error {}
 
 /// The live harness: one listener + provider + hub + store over a private
 /// temp container, with the fixture registry reply.
@@ -277,9 +314,10 @@ private struct TestHarness {
         let admission: AppDaemonAdmission
     }
 
-    func admissionOffer(connectionID: String) -> Offer {
-        let offer = store.admissionOffer(
+    func admissionOffer(connectionID: String) -> Offer? {
+        guard let offer = store.admissionOffer(
             socketPath: listener.socketPath, connectionID: connectionID)
+        else { return nil }
         return Offer(admission: AppDaemonAdmission(
             socketPath: offer.socketPath,
             bootstrapCredentialHex: offer.bootstrapCredentialHex,

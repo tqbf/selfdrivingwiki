@@ -143,6 +143,9 @@ public struct AppDaemonFailure: Error, Equatable, Sendable {
                    // skipped; the loop continues to the conservative map.
                    // swiftlint:disable:next silent_try_optional
                    let decoded = try? AppDaemonErrorDetails(unpackingAny: any),
+                   // A details VERSION this build does not understand is
+                   // likewise skipped — its numeric codes mean nothing to us.
+                   decoded.version == AppDaemonFailure.errorDetailsVersion,
                    let code = Code(detailsCode: decoded.code) {
                     return AppDaemonFailure(
                         code: code,

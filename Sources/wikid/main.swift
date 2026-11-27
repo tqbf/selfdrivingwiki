@@ -75,6 +75,10 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     private let daemon: WikiDaemon
     private let lock = NSLock()
     private var sinkID: UUID?
+    /// Set by the invalidation handler BEFORE the sweeps run. The gRPC
+    /// admission mint reads it under the session store's lock, so a
+    /// connection that died mid-admission cannot mint an orphan session.
+    private var grpcConnectionInvalidated = false
     /// The stable per-connection id the staged store uploads key to (slice
     /// 2, the sinkRegistrationID-style lock-guarded state): `storeOperation`
     /// threads it into the staging table's begin, and the connection's
@@ -102,12 +106,25 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     }
 
     /// Revoke the gRPC session bound to THIS connection (the admission path
-    /// binds sessions to the XPC connection id). Idempotent.
+    /// binds sessions to the XPC connection id). Idempotent. The liveness
+    /// flag is set FIRST — under the same lock the admission mint reads —
+    /// so an admission still in flight cannot mint after this runs.
     func revokeGRPCSession() {
         #if canImport(WikiDaemonGRPC)
+        lock.lock()
+        grpcConnectionInvalidated = true
+        lock.unlock()
         daemon.revokeGRPCSession(connectionID: connectionID)
         #endif
     }
+
+    #if canImport(WikiDaemonGRPC)
+    /// Liveness predicate handed to the admission mint; runs under the
+    /// session store's lock. Must not acquire the exporter lock.
+    func grpcConnectionIsLive() -> Bool {
+        !grpcConnectionInvalidated
+    }
+    #endif
 
     func listWikis(reply: @escaping (Data) -> Void) {
         reply(daemon.listWikis())
@@ -199,6 +216,13 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     func grpcAdmission(request: Data, reply: @escaping (Data) -> Void) {
         let sendableReply = SendableDataReply(reply: reply)
         let connectionID = lock.withLock { self.connectionID }
+        #if canImport(WikiDaemonGRPC)
+        let liveness: @Sendable () -> Bool = { [weak self] in
+            self?.grpcConnectionIsLive() ?? false
+        }
+        #else
+        let liveness: @Sendable () -> Bool = { true }
+        #endif
         Task { [daemon] in
             // Version check: the envelope is one int today; an unknown
             // version answers the unavailable reply rather than a guess.
@@ -216,7 +240,8 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
                 sendableReply.reply(unavailable)
                 return
             }
-            sendableReply.reply(await daemon.grpcAdmissionData(connectionID: connectionID))
+            sendableReply.reply(await daemon.grpcAdmissionData(
+                connectionID: connectionID, connectionIsLive: liveness))
         }
     }
 

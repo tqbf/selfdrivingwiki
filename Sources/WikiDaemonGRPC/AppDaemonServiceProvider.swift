@@ -20,11 +20,6 @@ import WikiDaemonGRPCContract
 /// credential or contract lie.
 public final class AppDaemonServiceProvider: AppDaemonAppDaemon.ServiceProtocol, Sendable {
 
-    /// The subscription's bounded buffer, in received-minus-forwarded events.
-    /// A client that stops reading backs the loop up past this bound and the
-    /// stream fails typed (RESYNC_REQUIRED) instead of growing without limit.
-    public static let outstandingEventBound = 256
-
     /// Capability names this daemon serves. Stable dotted strings; clients
     /// check membership, not order.
     public static let capabilities = ["admission.v1", "registry.v1", "events.v1"]
@@ -149,31 +144,40 @@ public final class AppDaemonServiceProvider: AppDaemonAppDaemon.ServiceProtocol,
             return authenticated
         }
 
+        // Subscribe + register OUTSIDE the streaming producer: the handle
+        // carries the hub's subscription id (revocation closes exactly
+        // this subscriber), and registration refuses a revoked session so
+        // the stream cannot outlive its session atomically.
+        let subscription = hub.subscribe()
+        let handle = SubscriptionHandle(
+            hub: hub, subscriptionID: subscription.id, sessionHex: session.credentialHex)
+        guard store.registerStream(sessionHex: session.credentialHex, handle) else {
+            handle.finish()
+            throw AppDaemonFailure(
+                code: .unauthenticated,
+                message: "Session was revoked before the subscription started")
+        }
+
         return GRPCCore.StreamingServerResponse(metadata: [:]) { writer in
             try await self.wire {
-                let handle = SubscriptionHandle(hub: self.hub, sessionHex: session.credentialHex)
-                self.store.registerStream(sessionHex: session.credentialHex, handle)
                 defer {
                     self.store.unregisterStream(sessionHex: session.credentialHex, id: handle.id)
                 }
 
-                let events = self.hub.subscribe()
-                var outstanding = 0
-                for await event in events {
-                    // nil = termination sentinel: hub shutdown or session
-                    // revocation. Plain end: the client resyncs from
-                    // authoritative state.
-                    guard let event else { return GRPCCore.Metadata() }
-                    outstanding += 1
-                    if outstanding > Self.outstandingEventBound {
-                        throw AppDaemonFailure(
-                            code: .resyncRequired,
-                            message: "Subscription buffer overflow; resync from authoritative state")
+                // The revocation/shutdown sentinel (nil) ends this loop with
+                // a plain return. Loop completion WITHOUT the sentinel is
+                // the hub's overflow path (see the hub's buffering policy):
+                // the contract requires the typed resync failure, never a
+                // silent end.
+                for await event in subscription.stream {
+                    guard let event else {
+                        return GRPCCore.Metadata()
                     }
                     try await writer.write(event)
-                    outstanding -= 1
                 }
-                return GRPCCore.Metadata()
+                throw AppDaemonFailure(
+                    code: .resyncRequired,
+                    message: "Subscription buffer overflow; resync from authoritative state")
             }
         }
     }
@@ -233,21 +237,25 @@ public final class AppDaemonServiceProvider: AppDaemonAppDaemon.ServiceProtocol,
 
     /// A registered live subscription. Session revocation calls
     /// ``finish()`` (idempotent): the stream ends client-visible with a
-    /// plain end and the client resyncs. The handle owns its id BEFORE it is
-    /// registered, so revocation can never race a registration into a
+    /// plain end and the client resyncs. The handle carries the HUB's
+    /// subscription id — revocation closes exactly the subscriber whose
+    /// stream this RPC is forwarding. The id exists before store
+    /// registration, so revocation can never race a registration into a
     /// missed termination.
-    // The `terminated` flag is covered by `lock`; hub + session hex are
-    // immutable after init.
+    // The `terminated` flag is covered by `lock`; hub + ids are immutable
+    // after init.
     // swiftlint:disable:next unchecked_sendable
     private final class SubscriptionHandle: DaemonSessionStore.SessionStreamHandle, @unchecked Sendable {
         let id = UUID()
         private let hub: DaemonRegistryEventHub
+        private let subscriptionID: UUID
         private let sessionHex: String
         private let lock = NSLock()
         private var terminated = false
 
-        init(hub: DaemonRegistryEventHub, sessionHex: String) {
+        init(hub: DaemonRegistryEventHub, subscriptionID: UUID, sessionHex: String) {
             self.hub = hub
+            self.subscriptionID = subscriptionID
             self.sessionHex = sessionHex
         }
 
@@ -259,7 +267,7 @@ public final class AppDaemonServiceProvider: AppDaemonAppDaemon.ServiceProtocol,
             }
             terminated = true
             lock.unlock()
-            hub.close(subscriptionID: id)
+            hub.close(subscriptionID: subscriptionID)
         }
     }
 }

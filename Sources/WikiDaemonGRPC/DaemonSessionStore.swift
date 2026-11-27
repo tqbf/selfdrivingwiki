@@ -146,14 +146,29 @@ public final class DaemonSessionStore: @unchecked Sendable {
     /// SAME session (a fresh 30 s window after the old one expired — this is
     /// the recovery path for a dropped exchange reply). A second session for
     /// one connection is never created.
+    ///
+    /// `livenessCheck` runs synchronously under this store's lock at mint
+    /// time, so XPC invalidation (which sets its flag and then revokes
+    /// through this same lock) is serialized against the mint: either the
+    /// invalidation landed first and the mint refuses, or the mint committed
+    /// and the subsequent revoke finds the session. That closes the
+    /// orphaned-credential window — a session minted for a connection that
+    /// already died.
     public func admissionOffer(
-        socketPath: String, connectionID: String
-    ) -> AdmissionOffer {
+        socketPath: String, connectionID: String,
+        livenessCheck: (() -> Bool)? = nil
+    ) -> AdmissionOffer? {
         let credential = credentialGenerator()
         let uptimeNow = now()
         lock.lock()
         defer { lock.unlock() }
         sweepExpiredLocked(uptimeNow: uptimeNow)
+        if let livenessCheck, !livenessCheck() {
+            // The XPC connection died while this admission was in flight;
+            // mint nothing — the invalidation's revoke (or this refusal)
+            // is the last word.
+            return nil
+        }
 
         let sessionHex: String
         if let existing = sessionsByConnection[connectionID], sessions[existing] != nil {
@@ -203,12 +218,17 @@ public final class DaemonSessionStore: @unchecked Sendable {
     }
 
     /// Register a live streaming subscription under a session, keyed by the
-    /// handle's own id. The handle is terminated when the session is revoked
-    /// or the store shuts down.
-    public func registerStream(sessionHex: String, _ handle: any SessionStreamHandle) {
+    /// handle's own id. ATOMIC against revocation: refuses (returns false)
+    /// when the session no longer exists, so a subscription can never
+    /// outlive the session that authenticated it. The handle is terminated
+    /// when the session is revoked or the store shuts down.
+    @discardableResult
+    public func registerStream(sessionHex: String, _ handle: any SessionStreamHandle) -> Bool {
         lock.lock()
         defer { lock.unlock() }
+        guard sessions[sessionHex] != nil else { return false }
         streams[sessionHex, default: [:]][handle.id] = handle
+        return true
     }
 
     /// Drop a stream registration without terminating it (clean client-side

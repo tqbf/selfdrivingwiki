@@ -20,7 +20,10 @@ struct AppDaemonSessionStoreContractTests {
         let store = DaemonSessionStore(
             now: { 1_000 },
             credentialGenerator: CounterCredentialGenerator().generator())
-        let offer = store.admissionOffer(socketPath: "/tmp/g/s", connectionID: "conn-1")
+        guard let offer = store.admissionOffer(socketPath: "/tmp/g/s", connectionID: "conn-1") else {
+            Issue.record("admission refused")
+            return
+        }
 
         let first = store.exchange(bootstrapHex: offer.bootstrapCredentialHex)
         let second = store.exchange(bootstrapHex: offer.bootstrapCredentialHex)
@@ -34,13 +37,22 @@ struct AppDaemonSessionStoreContractTests {
     func oneSessionPerConnection() {
         let generator = CounterCredentialGenerator()
         let store = DaemonSessionStore(credentialGenerator: generator.generator())
-        let first = store.admissionOffer(socketPath: "/tmp/g/s", connectionID: "conn-1")
-        let second = store.admissionOffer(socketPath: "/tmp/g/s", connectionID: "conn-1")
+        guard let first = store.admissionOffer(socketPath: "/tmp/g/s", connectionID: "conn-1") else {
+            Issue.record("admission refused")
+            return
+        }
+        guard let second = store.admissionOffer(socketPath: "/tmp/g/s", connectionID: "conn-1") else {
+            Issue.record("admission refused")
+            return
+        }
         let sessionA = store.exchange(bootstrapHex: first.bootstrapCredentialHex)
         let sessionB = store.exchange(bootstrapHex: second.bootstrapCredentialHex)
         #expect(sessionA == sessionB)
 
-        let other = store.admissionOffer(socketPath: "/tmp/g/s", connectionID: "conn-2")
+        guard let other = store.admissionOffer(socketPath: "/tmp/g/s", connectionID: "conn-2") else {
+            Issue.record("admission refused")
+            return
+        }
         let sessionC = store.exchange(bootstrapHex: other.bootstrapCredentialHex)
         #expect(sessionA != sessionC)
     }
@@ -55,14 +67,32 @@ struct AppDaemonSessionStoreContractTests {
         let store = DaemonSessionStore(
             now: { clock.nowUptimeNS },
             credentialGenerator: generator.generator())
-        let first = store.admissionOffer(socketPath: "/tmp/g/s", connectionID: "conn-1")
+        guard let first = store.admissionOffer(socketPath: "/tmp/g/s", connectionID: "conn-1") else {
+            Issue.record("admission refused")
+            return
+        }
 
         clock.nowUptimeNS += DaemonSessionStore.bootstrapLifetimeNanoseconds + 1
         #expect(store.exchange(bootstrapHex: first.bootstrapCredentialHex) == nil)
 
-        let fresh = store.admissionOffer(socketPath: "/tmp/g/s", connectionID: "conn-1")
+        guard let fresh = store.admissionOffer(socketPath: "/tmp/g/s", connectionID: "conn-1") else {
+            Issue.record("admission refused")
+            return
+        }
         let session = store.exchange(bootstrapHex: fresh.bootstrapCredentialHex)
         #expect(session != nil)
+
+        // Idempotency across recovery, on an unexpired bootstrap: the SAME
+        // bearer returns on every exchange.
+        let probe = DaemonSessionStore(credentialGenerator: CounterCredentialGenerator().generator())
+        guard let original = probe.admissionOffer(socketPath: "/tmp/g/s", connectionID: "conn-1") else {
+            Issue.record("admission refused")
+            return
+        }
+        let firstBearer = probe.exchange(bootstrapHex: original.bootstrapCredentialHex)
+        let again = probe.exchange(bootstrapHex: original.bootstrapCredentialHex)
+        #expect(firstBearer != nil)
+        #expect(again == firstBearer)
     }
 
     /// Revocation is idempotent, prevents further workload validation, and
@@ -71,7 +101,10 @@ struct AppDaemonSessionStoreContractTests {
     func revocationTerminatesStreams() {
         let generator = CounterCredentialGenerator()
         let store = DaemonSessionStore(credentialGenerator: generator.generator())
-        let offer = store.admissionOffer(socketPath: "/tmp/g/s", connectionID: "conn-1")
+        guard let offer = store.admissionOffer(socketPath: "/tmp/g/s", connectionID: "conn-1") else {
+            Issue.record("admission refused")
+            return
+        }
         let bearer = store.exchange(bootstrapHex: offer.bootstrapCredentialHex)
         guard let bearer else {
             Issue.record("exchange failed")
@@ -93,7 +126,10 @@ struct AppDaemonSessionStoreContractTests {
 
         // A NEW connection gets a new session (the XPC connection was
         // invalidated; the app reconnects with a fresh connection id).
-        let fresh = store.admissionOffer(socketPath: "/tmp/g/s", connectionID: "conn-2")
+        guard let fresh = store.admissionOffer(socketPath: "/tmp/g/s", connectionID: "conn-2") else {
+            Issue.record("admission refused")
+            return
+        }
         #expect(store.exchange(bootstrapHex: fresh.bootstrapCredentialHex) != nil)
     }
 
@@ -103,7 +139,10 @@ struct AppDaemonSessionStoreContractTests {
     func priorInstanceCredentialsFail() {
         let generator = CounterCredentialGenerator()
         let prior = DaemonSessionStore(credentialGenerator: generator.generator())
-        let priorOffer = prior.admissionOffer(socketPath: "/tmp/g/s", connectionID: "conn-1")
+        guard let priorOffer = prior.admissionOffer(socketPath: "/tmp/g/s", connectionID: "conn-1") else {
+            Issue.record("admission refused")
+            return
+        }
         guard let priorBearer = prior.exchange(bootstrapHex: priorOffer.bootstrapCredentialHex) else {
             Issue.record("prior exchange failed")
             return

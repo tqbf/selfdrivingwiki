@@ -82,16 +82,52 @@ struct AppDaemonBootstrapOnlyContractTests {
     @Test("the admission selector carries no workload payload")
     func admissionIsPayloadFree() throws {
         let source = try Self.protocolSource()
-        // The admission selector's reply is the endpoint+bootstrap envelope
-        // only; it must not grow families, operations, or opaque payloads.
+        // The admission selector + its wire structs are the ONLY new XPC
+        // surface; the whole admission section (selector doc comment
+        // through the wire file) must stay free of workload vocabulary.
         let grpcRange = source.range(of: "func grpcAdmission(")
         #expect(grpcRange != nil)
         if let range = grpcRange {
-            let slice = source[range.lowerBound...]
-                .prefix(while: { character in !character.isNewline })
-            #expect(!slice.contains("operation"), "admission must stay operation-free")
-            #expect(!slice.contains("family"), "admission must stay family-free")
-            #expect(!slice.contains("wikiID:"), "admission must not carry workload ids")
+            // The admission DECLARATION only (bounded by the protocol's
+            // end): legacy workload selectors and the event-sink protocol
+            // after it are audited elsewhere, not here.
+            let protocolEnd = source.range(
+                of: "public struct SignedWikiD",
+                range: range.lowerBound ..< source.endIndex)
+            let upperBound = protocolEnd?.lowerBound ?? source.endIndex
+            let lines = source[range.lowerBound ..< upperBound]
+                .split(separator: "\n", omittingEmptySubsequences: false)
+            var declaration = ""
+            for line in lines.dropFirst() {
+                if line.trimmingCharacters(in: .whitespaces).hasPrefix("func ")
+                    && !line.contains("grpcAdmission") {
+                    break
+                }
+                declaration += line + "\n"
+            }
+            for forbidden in ["operation", "family", "wikiID", "queue", "chat"] {
+                #expect(
+                    !declaration.lowercased().contains(forbidden),
+                    "admission declaration must stay free of '\(forbidden)'")
+            }
+        }
+        // The wire structs themselves: assert the admission reply's FIELD
+        // inventory — endpoint + bootstrap only, never a workload payload.
+        let wire = (try? String(
+            contentsOf: AppDaemonBootstrapOnlyContractTests.repoRoot()
+                .appendingPathComponent(
+                    "Sources/WikiDaemonContract/DaemonGRPCAdmissionWire.swift"),
+            encoding: .utf8)) ?? ""
+        for required in [
+            "socketPath", "bootstrapCredentialHex", "daemonInstanceID",
+            "bootstrapValidForSeconds", "endpointAvailable",
+        ] {
+            #expect(wire.contains(required), "admission wire missing \(required)")
+        }
+        for forbidden in ["operation", "pageID", "queueItem", "chatID", "store"] {
+            #expect(
+                !wire.lowercased().contains(forbidden.lowercased()),
+                "admission wire must stay free of '\(forbidden)'")
         }
     }
 
