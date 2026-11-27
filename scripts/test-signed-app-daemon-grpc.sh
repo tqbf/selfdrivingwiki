@@ -45,9 +45,14 @@ else
     || fail "no installed app found (run without SMOKE_SKIP_INSTALL first)"
 fi
 
-# 3. Launch the app (the smoke connects to the daemon it launches on demand).
-log "== launching the app"
-open -n "$APP" || fail "app launch failed"
+# 3. Launch the app. The daemon is resolved by launchd from the INSTALLED
+#    bundle (the XPC service name resolves there), so the launch targets
+#    the installed app — never the build copy, which can drift from the
+#    registered service in a SMOKE_SKIP_INSTALL=1 run.
+log "== launching the installed app"
+INSTALLED_APP="/Applications/$(basename "$APP")"
+[ -d "$INSTALLED_APP" ] || fail "installed app missing at $INSTALLED_APP (run without SMOKE_SKIP_INSTALL first)"
+open -n "$INSTALLED_APP" || fail "app launch failed"
 sleep 5
 
 SMOKE_BIN="$REPO_ROOT/.build/out/Products/Debug/AppDaemonSmoke"
