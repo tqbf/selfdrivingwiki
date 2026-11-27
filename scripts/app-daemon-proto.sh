@@ -49,12 +49,15 @@ sha256_of() { shasum -a 256 "$1" | awk '{print $1}'; }
 # --- tools -------------------------------------------------------------
 
 install_tool() {
-  local name="$1" url="$2" digest="$3" binary="$4"
+  # install_tool <name> <url> <digest> — echoes the verified archive path.
+  # ALL log lines go to stderr: this function runs inside $(...) capture,
+  # so anything on stdout corrupts the returned path.
+  local name="$1" url="$2" digest="$3"
   local downloads="$TOOLS_DIR/downloads"
   mkdir -p "$downloads"
   local archive="$downloads/$(basename "$url")"
   if [ ! -f "$archive" ]; then
-    log "downloading $name"
+    log "downloading $name" >&2
     curl -sSL -o "$archive" "$url" || fail "download failed: $url"
   fi
   local actual
@@ -62,33 +65,40 @@ install_tool() {
   if [ "$actual" != "$digest" ]; then
     fail "$name digest mismatch: expected $digest, got $actual"
   fi
-  log "verified $name (sha256 ok)"
+  log "verified $name (sha256 ok)" >&2
   echo "$archive"
 }
 
 build_from_source() {
   # build_from_source <archive> <product> <binary-name>
   local archive="$1" product="$2" binary="$3"
-  local src="$TOOLS_DIR/src/$(basename "$archive" .tar.gz)"
-  if [ ! -x "$TOOLS_DIR/bin/$binary" ]; then
-    mkdir -p "$TOOLS_DIR/src"
-    if [ ! -d "$src" ]; then
-      tar xzf "$archive" -C "$TOOLS_DIR/src"
-    fi
-    log "building $binary from pinned source (this takes a minute)"
-    (cd "$src" && swift build -c release --product "$product") \
-      || fail "swift build failed for $product"
-    # Resolve the products directory via SwiftPM itself: the layout varies
-    # by toolchain (`.build/release/`, `.build/<triple>/release/`, or the
-    # xcbuild `.build/out/Products/Release/`), so a hardcoded path breaks
-    # on newer toolchains.
-    local bin_dir
-    bin_dir="$(cd "$src" && swift build --show-bin-path -c release --product "$product" 2>/dev/null | tail -1)" \
-      || fail "cannot resolve bin path for $product"
-    [ -x "$bin_dir/$product" ] \
-      || fail "missing build output for $product (expected $bin_dir/$product)"
-    cp "$bin_dir/$product" "$TOOLS_DIR/bin/$binary"
+  if [ -x "$TOOLS_DIR/bin/$binary" ]; then return 0; fi
+  mkdir -p "$TOOLS_DIR/src"
+  # Locate (or extract) the checkout that declares this product. GitHub
+  # tag-only source archives are named `<tag>.tar.gz` (e.g. `1.41.0`)
+  # but extract to `<repo>-<tag>/` — never derive paths from the filename.
+  local src
+  src="$(grep -rls "name: \"$product\"" "$TOOLS_DIR/src" --include=Package.swift 2>/dev/null \
+    | head -1 | xargs dirname 2>/dev/null)"
+  if [ -z "$src" ]; then
+    tar xzf "$archive" -C "$TOOLS_DIR/src"
+    src="$(grep -rls "name: \"$product\"" "$TOOLS_DIR/src" --include=Package.swift 2>/dev/null \
+      | head -1 | xargs dirname 2>/dev/null)"
   fi
+  [ -n "$src" ] || fail "cannot locate a checked-out source for $product"
+  log "building $binary from pinned source in $src (this takes a minute)"
+  (cd "$src" && swift build -c release --product "$product") \
+    || fail "swift build failed for $product"
+  # Resolve the products directory via SwiftPM itself: the layout varies
+  # by toolchain (`.build/release/`, `.build/<triple>/release/`, or the
+  # xcbuild `.build/out/Products/Release/`), so a hardcoded path breaks
+  # on newer toolchains.
+  local bin_dir
+  bin_dir="$(cd "$src" && swift build --show-bin-path -c release --product "$product" 2>/dev/null | tail -1)" \
+    || fail "cannot resolve bin path for $product"
+  [ -x "$bin_dir/$product" ] \
+    || fail "missing build output for $product (expected $bin_dir/$product)"
+  cp "$bin_dir/$product" "$TOOLS_DIR/bin/$binary"
 }
 
 cmd_tools() {
@@ -108,14 +118,18 @@ cmd_tools() {
 
   if [ ! -x "$TOOLS_DIR/bin/protoc" ]; then
     rm -rf "$TOOLS_DIR/protoc-dist"
-    unzip -q -o "$protoc_zip" -d "$TOOLS_DIR/protoc-dist"
+    unzip -q -o "$protoc_zip" -d "$TOOLS_DIR/protoc-dist" \
+      || fail "protoc unzip failed"
     cp "$TOOLS_DIR/protoc-dist/bin/protoc" "$TOOLS_DIR/bin/protoc"
   fi
   if [ ! -x "$TOOLS_DIR/bin/buf" ]; then
     local tmpdir="$TOOLS_DIR/.buf-extract"
     rm -rf "$tmpdir"; mkdir -p "$tmpdir"
     tar xzf "$buf_tgz" -C "$tmpdir"
-    cp "$tmpdir/bin/buf" "$TOOLS_DIR/bin/buf"
+    # The tarball extracts with a top-level `buf/` directory (buf/bin/buf).
+    cp "$tmpdir/buf/bin/buf" "$TOOLS_DIR/bin/buf" \
+      || cp "$tmpdir/bin/buf" "$TOOLS_DIR/bin/buf" \
+      || fail "buf extraction failed"
     rm -rf "$tmpdir"
   fi
 
@@ -130,6 +144,10 @@ cmd_tools() {
   build_from_source "$gsp_archive" protoc-gen-grpc-swift-2 protoc-gen-grpc-swift-2
 
   chmod +x "$TOOLS_DIR/bin"/*
+  for tool in protoc buf protoc-gen-swift protoc-gen-grpc-swift-2; do
+    [ -x "$TOOLS_DIR/bin/$tool" ] \
+      || fail "$tool did not install (expected $TOOLS_DIR/bin/$tool)"
+  done
   log "tools ready in $TOOLS_DIR/bin"
 }
 
