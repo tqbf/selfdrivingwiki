@@ -6,24 +6,25 @@
 #
 # Flow:
 #   1. Preflight the signing config (signing/preflight.py).
-#   2. Build the signed app (make build) and install it (make install) so
-#      launchd can resolve the bundled wikid.xpc service. Set
-#      SMOKE_SKIP_INSTALL=1 to reuse an existing install.
-#   3. Launch the app, then drive the full AC.1 flow with the
-#      AppDaemonSmoke binary: XPC admission → gRPC session → ListWikis →
-#      live registry event → verified daemon stop → reconnect to a NEW
-#      daemon instance.
+#   2. Build the signed app (make build). The launch step then REUSES
+#      `make run` (install + open) so the smoke exercises the exact
+#      documented dev launch path. Set SMOKE_SKIP_INSTALL=1 to skip the
+#      reinstall and just open the existing /Applications copy.
+#   3. Drive the full AC.1 flow with the AppDaemonSmoke binary: XPC
+#      admission → gRPC session → ListWikis → live registry event →
+#      verified daemon stop → reconnect to a NEW daemon instance.
 #   4. Audit: no daemon PID may hold a TCP listener (the contract forbids
 #      TCP), checked before and after the drive.
 #
-# NOTE: step 2 stops this machine's running app instance (the documented
-# `make install` behavior). Run this when replacing the installed app is
-# acceptable.
+# NOTE: `make run` installs the app, which stops this machine's running
+# app instance (the documented behavior). Run this when replacing the
+# installed app is acceptable.
 
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP="$REPO_ROOT/build/Self Driving Wiki.app"
+INSTALLED_APP="/Applications/$(basename "$APP")"
 APP_GROUP="$(cd "$REPO_ROOT" && . signing/local.config >/dev/null 2>&1 && printf '%s' "$APP_GROUP")"
 
 log() { printf '%s\n' "$*"; }
@@ -33,26 +34,21 @@ fail() { printf 'test-signed-app-daemon-grpc: FAIL: %s\n' "$*" >&2; exit 1; }
 (cd "$REPO_ROOT" && python3 signing/preflight.py) \
   || fail "signing preflight failed (see signing/README.md)"
 
-# 2. Build + install.
-if [ "${SMOKE_SKIP_INSTALL:-0}" != "1" ]; then
-  log "== building the signed app"
-  (cd "$REPO_ROOT" && make build) || fail "make build failed"
-  log "== installing (stops the running app instance)"
-  (cd "$REPO_ROOT" && make install) || fail "make install failed"
-else
-  log "== SMOKE_SKIP_INSTALL=1: reusing the installed app"
-  [ -d "/Applications/$(basename "$APP")" ] \
-    || fail "no installed app found (run without SMOKE_SKIP_INSTALL first)"
-fi
+# 2. Build the signed app (both paths need it: `make run` installs the
+#    build copy; SMOKE_SKIP_INSTALL still needs a fresh smoke binary).
+log "== building the signed app"
+(cd "$REPO_ROOT" && make build) || fail "make build failed"
 
-# 3. Launch the app. The daemon is resolved by launchd from the INSTALLED
-#    bundle (the XPC service name resolves there), so the launch targets
-#    the installed app — never the build copy, which can drift from the
-#    registered service in a SMOKE_SKIP_INSTALL=1 run.
-log "== launching the installed app"
-INSTALLED_APP="/Applications/$(basename "$APP")"
-[ -d "$INSTALLED_APP" ] || fail "installed app missing at $INSTALLED_APP (run without SMOKE_SKIP_INSTALL first)"
-open -n "$INSTALLED_APP" || fail "app launch failed"
+# 3. Launch — REUSING make run for the default path.
+if [ "${SMOKE_SKIP_INSTALL:-0}" = "1" ]; then
+  log "== SMOKE_SKIP_INSTALL=1: opening the existing /Applications copy"
+  [ -d "$INSTALLED_APP" ] \
+    || fail "no installed app at $INSTALLED_APP (run without SMOKE_SKIP_INSTALL first)"
+  open -n "$INSTALLED_APP" || fail "app launch failed"
+else
+  log "== make run (installs the signed app, stops the running instance, opens it)"
+  (cd "$REPO_ROOT" && make run) || fail "make run failed"
+fi
 sleep 5
 
 SMOKE_BIN="$REPO_ROOT/.build/out/Products/Debug/AppDaemonSmoke"
