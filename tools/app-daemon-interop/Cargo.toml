@@ -1,0 +1,48 @@
+[package]
+name = "app-daemon-interop"
+version = "0.1.0"
+edition = "2021"
+description = """
+Language-neutrality conformance peer for the Self Driving Wiki app–daemon
+gRPC contract (Protocol/app-daemon). Two modes:
+  serve  — fixture server speaking the contract from the corpus manifest,
+           used by AppDaemonRustInteropTests against the production Swift
+           client;
+  probe  — fixture client that validates the PRODUCTION Swift server
+           against the same corpus.
+Not a shipping product; not packaged as a Rust daemon. Rust protocol
+conformance here proves the CONTRACT, not Rust daemon packaging, App Group
+access, Keychain access, or Apple framework parity.
+"""
+
+[[bin]]
+name = "app-daemon-interop"
+path = "src/main.rs"
+
+[dependencies]
+tonic = { version = "=0.14.6", default-features = false, features = [
+    "server",
+    "channel",
+    "transport",
+    "codegen",
+    "router",
+] }
+tonic-prost = "=0.14.6"
+prost = "=0.14.4"
+prost-types = "=0.14.4"
+tokio = { version = "=1.52.4", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "time",
+] }
+tokio-stream = { version = "=0.1.18", features = ["net"] }
+tower = { version = "=0.5.3", features = ["util"] }
+hyper-util = "=0.1.20"
+http = "=1.3.1"
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.145"
+
+[build-dependencies]
+tonic-prost-build = "=0.14.6"
+prost-build = "=0.14.4"

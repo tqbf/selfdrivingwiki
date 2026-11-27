@@ -136,6 +136,70 @@ NOTES_FILE       ?=
 
 all: build
 
+# --- App–daemon wire contract (Protocol/app-daemon) ------------------------
+# Generation + compatibility + interop tooling; see the script header and
+# plans/app-daemon-wire-contract.md. Ordinary `swift build` needs none of
+# these — the generated Swift is committed.
+
+APP_DAEMON_PROTO := scripts/app-daemon-proto.sh
+APP_DAEMON_PEER := tools/app-daemon-interop/target/debug/app-daemon-interop
+
+.PHONY: app-daemon-tools generate-app-daemon-proto check-app-daemon-proto \
+	update-app-daemon-proto-baseline app-daemon-interop test-app-daemon-interop \
+	test-app-daemon-grpc benchmark-app-daemon-grpc test-signed-app-daemon-grpc
+
+# Install + verify the pinned codegen tools (protoc, buf, Swift plugins).
+app-daemon-tools:
+	$(APP_DAEMON_PROTO) tools
+
+# Regenerate the committed Swift bindings from the pinned tools.
+generate-app-daemon-proto: app-daemon-tools
+	$(APP_DAEMON_PROTO) generate
+
+# Drift + lint + wire-compatibility checks (fails CI on drift or a breaking
+# schema edit; includes the negative breaking-edit test).
+check-app-daemon-proto: app-daemon-tools
+	$(APP_DAEMON_PROTO) check
+
+# Regenerate the accepted descriptor baseline. Compatibility review REQUIRED
+# before committing — this is the gate the breaking check compares against.
+update-app-daemon-proto-baseline: app-daemon-tools
+	$(APP_DAEMON_PROTO) update-baseline
+
+# Build the Rust interop peer (tonic/prost) from the same schemas, locked.
+app-daemon-interop: app-daemon-tools
+	$(APP_DAEMON_PROTO) interop-build
+
+# Rust↔Swift conformance: both roles over the shared corpus
+# (AppDaemonRustInteropTests in WikiFSAppTests). Fails if the peer is
+# missing for the selected tier.
+test-app-daemon-interop: app-daemon-interop
+	SWIFT_TEST_NUM_WORKERS=1 \
+	WIKIFS_APP_TESTS=1 \
+	WIKIFS_INTEROP_PEER=$(APP_DAEMON_PEER) \
+	scripts/test-optin-app-tests-reconciled.sh \
+		--expect 'AppDaemonRustInteropTests passed both roles' \
+		--filter 'AppDaemonRustInteropTests'
+
+# Opt-in Swift gRPC suites (admission, session store contract). Run on a
+# developer Mac; CI runs the same filters in the required job.
+test-app-daemon-grpc:
+	SWIFT_TEST_NUM_WORKERS=1 \
+	WIKIFS_APP_TESTS=1 \
+	scripts/test-optin-app-tests-reconciled.sh \
+		--expect 'App Daemon admission (live)' \
+		--filter 'AppDaemonAdmissionTests|AppDaemonSessionStoreContractTests'
+
+# Local paired benchmark (XPC vs gRPC budget). NOT a hosted-CI gate: run on
+# a quiet Mac and record both runs in the progress note before cutover.
+benchmark-app-daemon-grpc:
+	scripts/benchmark-app-daemon-grpc.sh
+
+# Signed app cold-launch smoke (AC.1). Requires signing/local.config and a
+# developer Mac; hosted CI cannot replace it.
+test-signed-app-daemon-grpc:
+	scripts/test-signed-app-daemon-grpc.sh
+
 help:
 	@echo "Build:"
 	@echo "  make / build      Build $(CONFIG) into ./$(APP)  (default)"

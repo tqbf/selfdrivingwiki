@@ -1,0 +1,6 @@
+# Pinned toolchain for the app–daemon interop peer (tools.lock.json records
+# the pin). rustup installs this channel on first cargo invocation; Cargo.lock
+# pins the crate versions.
+[toolchain]
+channel = "1.96.0"
+profile = "minimal"

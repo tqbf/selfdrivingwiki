@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "comment": "Shared fixture corpus for the app–daemon wire contract (plans/app-daemon-wire-contract.md). One corpus drives BOTH roles: the Rust fixture server serves these replies to the production Swift client, and the Rust probe validates the production Swift server against them. Comparison is by decoded known-field VALUES AND PRESENCE, never raw re-encoded bytes (Protobuf serialization is not canonical).",
+  "admission": {
+    "bootstrap": "fixture-bootstrap-credential",
+    "sessionHex": "647570657373696f6e63726564656e7469616c3332"
+  },
+  "capabilities": {
+    "contractVersion": 1,
+    "daemonInstanceID": "fixture-instance",
+    "capabilities": ["admission.v1", "registry.v1", "events.v1"]
+  },
+  "cases": [
+    {
+      "id": "list-wikis-basic",
+      "operation": "listWikis",
+      "reply": {
+        "wikis": [
+          {
+            "id": "01HZY4WXQ8PJ7RKP3GV9X8QW2T",
+            "displayName": "Fixture Wiki",
+            "createdAt": "2023-11-14T22:13:20Z",
+            "lastUsedAt": "2023-11-14T22:14:20Z",
+            "homePageID": null
+          },
+          {
+            "id": "01JABCDEF0123456789ABCDEF0",
+            "displayName": "Second Wiki 兄",
+            "createdAt": "2024-01-02T03:04:05Z",
+            "lastUsedAt": "2024-02-03T04:05:06Z",
+            "homePageID": "01HPAGE0123456789ABCDEFGHIJKLMNOP"
+          }
+        ]
+      }
+    },
+    {
+      "id": "list-wikis-empty",
+      "operation": "listWikis",
+      "reply": { "wikis": [] }
+    },
+    {
+      "id": "event-registry-created",
+      "operation": "event",
+      "event": {
+        "kind": "CREATED",
+        "wikiID": "01HZY4WXQ8PJ7RKP3GV9X8QW2T",
+        "displayName": "Fixture Wiki"
+      }
+    },
+    {
+      "id": "event-registry-deleted-no-name",
+      "operation": "event",
+      "event": {
+        "kind": "DELETED",
+        "wikiID": "01JABCDEF0123456789ABCDEF0",
+        "displayName": null
+      }
+    },
+    {
+      "id": "error-wiki-not-found",
+      "operation": "error",
+      "error": {
+        "grpcCode": "NotFound",
+        "detailsCode": "WIKI_NOT_FOUND",
+        "message": "no such wiki",
+        "retryable": false,
+        "daemonInstanceID": "fixture-instance"
+      }
+    },
+    {
+      "id": "error-invalid-family",
+      "operation": "error",
+      "error": {
+        "grpcCode": "InvalidArgument",
+        "detailsCode": "INVALID_REQUEST",
+        "message": "Event family not served by this contract version: 2",
+        "retryable": false,
+        "daemonInstanceID": "fixture-instance"
+      }
+    }
+  ]
+}

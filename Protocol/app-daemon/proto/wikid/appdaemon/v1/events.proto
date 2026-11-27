@@ -1,0 +1,60 @@
+// Event subscription (first slice): REGISTRY events only.
+//
+// Ordering contract for this family: registry events carry a per-daemon
+// monotonic `sequence`. The stream has NO replay: a subscriber that needs a
+// consistent view establishes it by calling ListWikis (the authoritative
+// read) BEFORE subscribing, and re-lists after every event (registry events
+// are self-validating — the client answers them by re-reading the whole
+// registry, so a dropped or duplicated event costs one idempotent reload).
+// On RESYNC_REQUIRED (overflow, epoch change, or daemon restart) the client
+// drops the stream, re-lists, and re-subscribes from a fresh baseline.
+syntax = "proto3";
+
+package wikid.appdaemon.v1;
+
+import "wikid/appdaemon/v1/common.proto";
+
+option swift_prefix = "AppDaemon";
+
+message SubscribeEventsRequest {
+  // Event families the caller wants. First slice: REGISTRY only — the
+  // server rejects any other family with INVALID_REQUEST so a client never
+  // believes a family is flowing when it is not.
+  repeated EventFamily families = 1;
+}
+
+// Closed family set. Values are stable; only append.
+enum EventFamily {
+  EVENT_FAMILY_UNSPECIFIED = 0;
+  // Registry mutations (wikis.json create/rename/delete).
+  EVENT_FAMILY_REGISTRY = 1;
+  // reserved for the workload migration: STORE = 2, QUEUE = 3, CHAT = 4.
+  reserved 2 to 16;
+}
+
+// One streamed event. The `sequence` is the daemon-wide monotonically
+// increasing cursor (per daemon instance); it is informational in this
+// family (see the file header for the resync contract).
+message DaemonEvent {
+  uint64 sequence = 1;
+
+  oneof event {
+    RegistryEvent registry = 2;
+  }
+}
+
+message RegistryEvent {
+  enum Kind {
+    // Receiver treats any unrecognized numeric kind as UNSPECIFIED and drops
+    // the event after logging (enum evolution: forward-safe).
+    KIND_UNSPECIFIED = 0;
+    KIND_CREATED = 1;
+    KIND_RENAMED = 2;
+    KIND_DELETED = 3;
+  }
+
+  Kind kind = 1;
+  WikiId wiki_id = 2;
+  // Present for CREATED/RENAMED; absent for DELETED. Explicit presence.
+  optional string display_name = 3;
+}

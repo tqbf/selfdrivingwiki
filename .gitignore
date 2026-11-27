@@ -54,3 +54,6 @@ sonar-mutation-report.json
 
 # SwiftLint transient config written by `make lint-baseline`
 .swiftlint-regen.yml
+
+# Rust interop peer build artifacts (tools.lock.json + Cargo.lock are committed)
+tools/app-daemon-interop/target/

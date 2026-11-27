@@ -1,4 +1,4 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.1
 import PackageDescription
 import Foundation
 
@@ -64,6 +64,16 @@ let package = Package(
         // Yams — YAML decoding for CordisLoader patch files
         // (bundles/profiles/home/--patch layers). See plans/cordis-full-architecture.md.
         .package(url: "https://github.com/jpsim/Yams", from: "5.0.0"),
+        // gRPC Swift 2 — the language-neutral app↔daemon wire contract
+        // (plans/app-daemon-wire-contract.md). Schemas live in
+        // Protocol/app-daemon/proto; the generated Swift is committed in the
+        // WikiDaemonGRPCContract target. macOS-only edge: the contract is
+        // served on a Unix-domain socket, never TCP, and Linux keeps the
+        // daemon's stdio transport.
+        .package(url: "https://github.com/grpc/grpc-swift-2", from: "2.4.4"),
+        .package(url: "https://github.com/grpc/grpc-swift-protobuf", from: "2.5.0"),
+        .package(url: "https://github.com/grpc/grpc-swift-nio-transport", from: "2.10.0"),
+        .package(url: "https://github.com/apple/swift-protobuf", from: "1.41.0"),
     ],
     targets: [
         // Foundation-only typed component runtime. Cordis owns actor-isolated
@@ -281,6 +291,44 @@ let package = Package(
             path: "Sources/WikiDaemonContract",
             swiftSettings: strictSwiftSettings
         ),
+        // Generated Protocol Buffers + gRPC types for the language-neutral
+        // app↔daemon wire contract. Schemas: Protocol/app-daemon/proto
+        // (plans/app-daemon-wire-contract.md). The generated Swift is
+        // COMMITTED so ordinary `swift build` never needs protoc or the
+        // plugins; `make check-app-daemon-proto` regenerates and fails on
+        // drift. Deliberately NOT strictSwiftSettings — generated code may
+        // carry warnings the hand-written sources must not. Referenced only
+        // through macOS-conditional edges, so Linux builds never compile it.
+        .target(
+            name: "WikiDaemonGRPCContract",
+            dependencies: [
+                .product(name: "SwiftProtobuf", package: "swift-protobuf"),
+                .product(name: "GRPCCore", package: "grpc-swift-2"),
+                .product(name: "GRPCProtobuf", package: "grpc-swift-protobuf"),
+            ],
+            path: "Protocol/app-daemon/generated/swift",
+            swiftSettings: []
+        ),
+        // Hand-written gRPC runtime for the app↔daemon contract: the daemon's
+        // Unix-domain-socket listener (flock-guarded, mode-0700 directory,
+        // no TCP), the XPC-admission session-credential store, the typed
+        // failure↔status-details mapping, and the client-side session. All
+        // sources are #if os(macOS)-guarded; consumers reference this target
+        // through macOS-conditional edges only.
+        .target(
+            name: "WikiDaemonGRPC",
+            dependencies: [
+                "WikiDaemonContract",
+                "WikiDaemonGRPCContract",
+                // DebugLog (os_log) — teardown failures must stay visible
+                // in Console.app per the house logging rule.
+                "WikiFSTypes",
+                .product(name: "GRPCNIOTransportHTTP2Posix", package: "grpc-swift-nio-transport",
+                         condition: .when(platforms: [.macOS])),
+            ],
+            path: "Sources/WikiDaemonGRPC",
+            swiftSettings: strictSwiftSettings
+        ),
         // The wiki-link grammar cluster — pure-logic parser/resolver/rewriter/
         // rules. Depends only on WikiFSTypes (PageID/ULID/ParsedLink/etc.).
         // Extracted from WikiFSCore in module restructuring Phase 1 (#532).
@@ -444,6 +492,12 @@ let package = Package(
                 // DaemonWorkloadClient) speaks WikiDaemonProtocol + throws
                 // WikiDaemonError. Empty on Linux; harmless there.
                 "WikiDaemonContract",
+                // The gRPC app-side session client (typed per-family adapters,
+                // plans/app-daemon-wire-contract.md). macOS-only edge.
+                .target(name: "WikiDaemonGRPC",
+                        condition: .when(platforms: [.macOS])),
+                .target(name: "WikiDaemonGRPCContract",
+                        condition: .when(platforms: [.macOS])),
                 // WikiFSEngine is needed for DaemonWorkloadClient (Phase 0 daemon
                 // workloads) which decodes QueueSnapshot from XPC JSON. macOS-only
                 // because WikiFSEngine pulls in the ACP product.
@@ -581,6 +635,13 @@ let package = Package(
                 // WikiDaemonProtocol + holds WikiDaemonEventSink proxies. Empty
                 // on Linux (the daemon uses the stdio transport there).
                 "WikiDaemonContract",
+                // The gRPC workload listener (plans/app-daemon-wire-contract.md):
+                // Unix-domain socket, XPC-admitted sessions. macOS-only edge;
+                // Linux keeps the stdio transport.
+                .target(name: "WikiDaemonGRPC",
+                        condition: .when(platforms: [.macOS])),
+                .target(name: "WikiDaemonGRPCContract",
+                        condition: .when(platforms: [.macOS])),
                 .target(name: "WikiFSEngine",
                         condition: .when(platforms: [.macOS])),
                 // Phase 3 of plans/cli-domain-commands.md: the daemon EXECUTES
@@ -691,6 +752,14 @@ let package = Package(
                            // macOS-only like wikid itself.
                            .target(name: "wikid",
                                    condition: .when(platforms: [.macOS])),
+                           // The gRPC wire contract's pure session/mapping
+                           // suites (plans/app-daemon-wire-contract.md):
+                           // session store semantics, socket ownership,
+                           // source-contract checks. macOS-only edges.
+                           .target(name: "WikiDaemonGRPC",
+                                   condition: .when(platforms: [.macOS])),
+                           .target(name: "WikiDaemonGRPCContract",
+                                   condition: .when(platforms: [.macOS])),
                            // On Linux, several test files do `import SQLite3`
                            // to call sqlite3_* directly. The SDK's Swift module
                            // map isn't auto-available there — link the CSQLite
@@ -735,6 +804,11 @@ let package = Package(
             dependencies: [
                 "WikiFSCore", "WikiCtlCore", "WikiDaemonContract", "WikiFSTestSupport",
                 "WikiFSCodeHighlighting",
+                // gRPC wire-contract suites (admission, interop, parity —
+                // plans/app-daemon-wire-contract.md). macOS-only edges; this
+                // test target is already filtered out on Linux.
+                .target(name: "WikiDaemonGRPC", condition: .when(platforms: [.macOS])),
+                .target(name: "WikiDaemonGRPCContract", condition: .when(platforms: [.macOS])),
                 .target(name: "WikiFSEngine", condition: .when(platforms: [.macOS])),
                 .target(name: "WikiFS", condition: .when(platforms: [.macOS])),
                 .target(name: "WikiFSMLX", condition: .when(platforms: [.macOS])),

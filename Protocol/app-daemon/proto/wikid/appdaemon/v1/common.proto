@@ -1,0 +1,103 @@
+// Language-neutral app–daemon contract — common values.
+//
+// Versioned proto package: the version is the LAST package segment. A
+// wire-incompatible change mints `wikid.appdaemon.v2` (and so on); additive,
+// wire-compatible changes stay inside v1 and bump `contract_version` in the
+// capabilities reply only.
+//
+// Semantic rules (apply to every file in this package):
+// - IDs are wrapper messages, never bare strings: a `WikiId` cannot be
+//   assigned where a `PageId` is expected. The raw value is the same ULID
+//   string the JSON/SQLite/FileProvider compatibility contracts use
+//   (plans/page-source-id-separation.md); the wrapper exists so the type
+//   system carries the namespace, not to change the bytes.
+// - Time is `google.protobuf.Timestamp` (UTC, nanosecond precision). Never
+//   epoch millis inside a payload field.
+// - Enum value 0 is always the semantic "UNSPECIFIED"/"UNKNOWN" member.
+//   Senders never send 0 deliberately; receivers MUST treat an unrecognized
+//   numeric value as the 0 member (Protobuf closed enums: Swift generated
+//   `UNRECOGNIZED(Int)`, prost: catch-all `_`) and surface a typed
+//   `unknown_variant` failure rather than guessing.
+// - Presence: singular scalar fields that a server may legitimately omit use
+//   `optional` so both encoders emit explicit presence (Swift `hasX`,
+//   prost `Option<T>`). Never model absence with "" / 0 sentinels.
+// - Every field number removed in the future MUST be `reserved` together with
+//   its name in the same edit. Never renumber a field; never change a field's
+//   type; never change a field's label between singular and repeated.
+// - Oneofs: adding a variant is the only evolution. Dispatch over a oneof
+//   MUST be exhaustive at the boundary (unknown case -> typed failure), never
+//   a string tag plus opaque bytes.
+// - Payloads have explicit transport bounds (see service.proto comments).
+//   Senders chunk above the bound; receivers reject with RESOURCE_EXHAUSTED.
+syntax = "proto3";
+
+package wikid.appdaemon.v1;
+
+// `AppDaemon` keeps generated types out of the global namespace: every
+// message becomes AppDaemon<Name> (AppDaemonWikiId, AppDaemonErrorDetails, …)
+// and can never collide with domain types like WikiFSCore.WikiID.
+option swift_prefix = "AppDaemon";
+
+// A wiki identity: the stable ULID. Separate namespace from page/source/chat/
+// queue ids by construction — this wrapper is the only type that may appear
+// in a field documented as "a wiki".
+message WikiId {
+  string value = 1;
+}
+
+// A page identity (rows in `pages`): its own namespace, never interchangeable
+// with WikiId. Raw value is the compatibility ULID string.
+message PageId {
+  string value = 1;
+}
+
+// Versioned error details carried in gRPC status details on every failure
+// this contract produces. Stable enum codes: the NUMERIC values are the
+// compatibility contract — never renumber, never reuse a retired code, only
+// append.
+message ErrorDetails {
+  // Semantics version of this message itself (bump on an additive,
+  // non-breaking change; mint a new details type for a breaking one).
+  uint32 version = 1;
+
+  // Stable machine-readable failure taxonomy. Maps from the daemon's typed
+  // failures; the mapping table lives next to the service implementation.
+  enum Code {
+    // Receiver-side unknown code. Never sent deliberately.
+    CODE_UNSPECIFIED = 0;
+    // The request decoded but is not a valid request (bad argument shape,
+    // mismatched ids, unknown variant in a oneof).
+    CODE_INVALID_REQUEST = 1;
+    // Missing, expired, or revoked session credential, or the wrong daemon
+    // instance. Before workload dispatch, always.
+    CODE_UNAUTHENTICATED = 2;
+    // The capability set required for this call is not present in
+    // GetCapabilitiesReply (client is too old/new for this daemon).
+    CODE_CAPABILITY_MISMATCH = 3;
+    // The event subscription lost its position (overflow, epoch change, or
+    // daemon restart). The client must drop the stream and resync from
+    // authoritative state; no events are recoverable from this stream.
+    CODE_RESYNC_REQUIRED = 4;
+    // A referenced wiki does not exist.
+    CODE_WIKI_NOT_FOUND = 5;
+    // The daemon cannot serve right now (booting, shutting down, or a
+    // transient internal condition). Retryable.
+    CODE_UNAVAILABLE = 6;
+    // A payload exceeded the declared transport bound.
+    CODE_RESOURCE_EXHAUSTED = 7;
+    // The call exceeded its deadline (server-side enforcement).
+    CODE_DEADLINE_EXCEEDED = 8;
+  }
+
+  Code code = 2;
+
+  // Human-readable detail. Not for machine dispatch — use `code`.
+  string message = 3;
+
+  // True when the same request may succeed on retry (UNAVAILABLE-family).
+  bool retryable = 4;
+
+  // The daemon instance id that produced the failure. Lets a client detect
+  // that the instance it authenticated against is not the one answering.
+  string daemon_instance_id = 5;
+}

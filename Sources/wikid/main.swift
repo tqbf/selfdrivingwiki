@@ -58,6 +58,10 @@ final class WikiDaemonListenerDelegate: NSObject, NSXPCListenerDelegate {
             // connection keyed at payloadBegin (same cleanup site, same
             // lifecycle as the sink unregister).
             exporter?.dropStagedUploads()
+            // The gRPC session bound to THIS connection dies with it
+            // (plans/app-daemon-wire-contract.md): no new gRPC calls, live
+            // streams terminated. Runs before the sweeps above read state.
+            exporter?.revokeGRPCSession()
         }
 
         newConnection.resume()
@@ -95,6 +99,14 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     /// invalidation handler beside ``unregisterSink()``.
     func dropStagedUploads() {
         daemon.dropStoreUploads(connectionID: connectionID)
+    }
+
+    /// Revoke the gRPC session bound to THIS connection (the admission path
+    /// binds sessions to the XPC connection id). Idempotent.
+    func revokeGRPCSession() {
+        #if canImport(WikiDaemonGRPC)
+        daemon.revokeGRPCSession(connectionID: connectionID)
+        #endif
     }
 
     func listWikis(reply: @escaping (Data) -> Void) {
@@ -179,6 +191,32 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
                 wikiID: wikiID, request: request,
                 sinkRegistrationID: registrationID,
                 connectionID: connectionID))
+        }
+    }
+
+    // MARK: - gRPC endpoint admission (plans/app-daemon-wire-contract.md)
+
+    func grpcAdmission(request: Data, reply: @escaping (Data) -> Void) {
+        let sendableReply = SendableDataReply(reply: reply)
+        let connectionID = lock.withLock { self.connectionID }
+        Task { [daemon] in
+            // Version check: the envelope is one int today; an unknown
+            // version answers the unavailable reply rather than a guess.
+            // An undecodable request IS the unknown-version case — the
+            // unavailable reply is the intended handling.
+            // swiftlint:disable:next silent_try_optional
+            let decoded = try? JSONDecoder().decode(
+                DaemonGRPCAdmissionRequest.self, from: request)
+            if decoded?.version != DaemonGRPCAdmissionWire.currentVersion {
+                // The unavailable envelope is fixed-shape; an encode failure
+                // collapses to empty data, which the client treats as the
+                // same "stay on XPC" outcome.
+                // swiftlint:disable:next silent_try_optional
+                let unavailable = (try? JSONEncoder().encode(DaemonGRPCAdmissionReply.unavailable())) ?? Data()
+                sendableReply.reply(unavailable)
+                return
+            }
+            sendableReply.reply(await daemon.grpcAdmissionData(connectionID: connectionID))
         }
     }
 
@@ -816,6 +854,10 @@ let daemonSocket = try DaemonSearchSocketServer(containerDirectory: containerDir
 }
 let processLifetime = DaemonProcessLifetimeCoordinator(
     shutdown: {
+        // gRPC first (plans/app-daemon-wire-contract.md): stop accepting,
+        // revoke sessions + close streams, await listener shutdown, unlink
+        // under the guard, release it — all before the other transports go.
+        await daemon.stopGRPC()
         daemonSocket.stop()
         // §5: revoke every live scoped run before the daemon goes away —
         // endpoint unlink + terminal lease revocation, so no authority
@@ -884,6 +926,27 @@ case .ready:
         DebugLog.store("wikid: daemon socket startup failed: \(error)")
         Darwin.exit(EXIT_FAILURE)
     }
+    #if canImport(WikiDaemonGRPC)
+    // Start the gRPC workload listener (plans/app-daemon-wire-contract.md):
+    // Unix domain socket under the App Group container, flock-guarded,
+    // admission over XPC only. The listener serves the first-slice surface
+    // (capabilities / registry read / registry events); the XPC workload
+    // route stays production until family parity passes. A startup failure
+    // is loud but NOT fatal: the daemon keeps serving XPC and admission
+    // answers the versioned unavailable reply.
+    do {
+        let grpcCoordinator = try DaemonGRPCAdmissionCoordinator(
+            containerDirectory: containerDirectory,
+            listWikisHandler: { [daemon] in
+                try GRPCRegistryMapping.listWikisReply(fromJSON: daemon.listWikis())
+            })
+        daemon.installGRPCAdmissionCoordinator(grpcCoordinator)
+        DebugLog.store("wikid: gRPC listener installed, serving first-slice surface")
+    } catch {
+        DebugLog.store(
+            "wikid: gRPC listener NOT installed (admission answers unavailable): \(error)")
+    }
+    #endif
 case .failed:
     Darwin.exit(EXIT_FAILURE)
 case .booting:
