@@ -78,8 +78,16 @@ build_from_source() {
     log "building $binary from pinned source (this takes a minute)"
     (cd "$src" && swift build -c release --product "$product") \
       || fail "swift build failed for $product"
-    cp "$src/.build/release/$product" "$TOOLS_DIR/bin/$binary" \
-      || fail "missing build output for $product"
+    # Resolve the products directory via SwiftPM itself: the layout varies
+    # by toolchain (`.build/release/`, `.build/<triple>/release/`, or the
+    # xcbuild `.build/out/Products/Release/`), so a hardcoded path breaks
+    # on newer toolchains.
+    local bin_dir
+    bin_dir="$(cd "$src" && swift build --show-bin-path -c release --product "$product" 2>/dev/null | tail -1)" \
+      || fail "cannot resolve bin path for $product"
+    [ -x "$bin_dir/$product" ] \
+      || fail "missing build output for $product (expected $bin_dir/$product)"
+    cp "$bin_dir/$product" "$TOOLS_DIR/bin/$binary"
   fi
 }
 
