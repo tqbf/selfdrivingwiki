@@ -185,7 +185,11 @@ order. The operation-specific types follow
 For example, `activeContentVersion` maps to
 `StoreSmallRequest.active_content_version` and
 `StoreSmallReply.active_content_version`. Each envelope carries one wiki
-scope. No operation payload repeats that scope.
+scope, and no operation payload repeats that scope. Envelope tag layout:
+operation arms occupy 1..N in canonical ledger order; `WikiId wiki_id`
+takes tag N+1 (request and reply); request envelopes take
+`MutationStamp stamp` at tag N+2. Operation payloads never repeat the
+wiki scope.
 
 | RPC / schema sketch | Operation set | Success reply |
 |---|---|---|
