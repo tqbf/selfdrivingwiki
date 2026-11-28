@@ -39,23 +39,24 @@ fail() { printf 'test-signed-app-daemon-grpc: FAIL: %s\n' "$*" >&2; exit 1; }
 log "== building the signed app"
 (cd "$REPO_ROOT" && make build) || fail "make build failed"
 
-# Kill stale daemon instances BEFORE launching: `make run` kills the app
-# but launchd may keep the XPC daemon alive briefly. If a new daemon
-# launches while the old one still holds the search-socket flock, the new
-# daemon crashes fatally (serverAlreadyRunning) and the app shows error
-# 4097. Kill the daemon + wait for exit to prevent the race.
-log "== killing stale daemon instances (prevents flock race)"
-pkill -f wikid.xpc 2>/dev/null || true
+# Kill ALL Self Driving Wiki + daemon processes BEFORE launching: both the
+# build copy and the installed copy may have app/daemon instances running.
+# Two simultaneous instances compete for the same XPC service and the
+# daemon's socket flock — the surviving app gets error 4097.
+log "== killing all app + daemon instances (prevents instance conflicts)"
+pkill -f "wikid.xpc" 2>/dev/null || true
+pkill -f "Self Driving Wiki.app.*MacOS/Self Driving Wiki" 2>/dev/null || true
+pkill -f "WikiFSFileProvider.appex" 2>/dev/null || true
 for _ in $(seq 1 30); do
-  pgrep -f wikid.xpc >/dev/null 2>&1 || break
+  ! pgrep -f "wikid.xpc" 2>/dev/null && \
+    ! pgrep -f "Self Driving Wiki.app.*MacOS/Self Driving Wiki" 2>/dev/null || break
   sleep 0.5
 done
-if pgrep -f wikid.xpc >/dev/null 2>&1; then
-  # SIGKILL if TERM didn't work within 15s
-  pkill -9 -f wikid.xpc 2>/dev/null || true
-  sleep 2
-fi
-log "== daemon processes cleared"
+# Force-kill any survivors
+pkill -9 -f "wikid.xpc" 2>/dev/null || true
+pkill -9 -f "Self Driving Wiki.app.*MacOS/Self Driving Wiki" 2>/dev/null || true
+sleep 2
+log "== all app + daemon processes cleared"
 
 # 3. Launch — REUSING make run for the default path.
 if [ "${SMOKE_SKIP_INSTALL:-0}" = "1" ]; then
