@@ -39,6 +39,25 @@ fail() { printf 'test-signed-app-daemon-grpc: FAIL: %s\n' "$*" >&2; exit 1; }
 log "== building the signed app"
 (cd "$REPO_ROOT" && make build) || fail "make build failed"
 
+# Kill ALL Self Driving Wiki + daemon processes BEFORE launching: both the
+# build copy and the installed copy may have app/daemon instances running.
+# Two simultaneous instances compete for the same XPC service and the
+# daemon's socket flock — the surviving app gets error 4097.
+log "== killing all app + daemon instances (prevents instance conflicts)"
+pkill -f "wikid.xpc" 2>/dev/null || true
+pkill -f "Self Driving Wiki.app.*MacOS/Self Driving Wiki" 2>/dev/null || true
+pkill -f "WikiFSFileProvider.appex" 2>/dev/null || true
+for _ in $(seq 1 30); do
+  ! pgrep -f "wikid.xpc" 2>/dev/null && \
+    ! pgrep -f "Self Driving Wiki.app.*MacOS/Self Driving Wiki" 2>/dev/null || break
+  sleep 0.5
+done
+# Force-kill any survivors
+pkill -9 -f "wikid.xpc" 2>/dev/null || true
+pkill -9 -f "Self Driving Wiki.app.*MacOS/Self Driving Wiki" 2>/dev/null || true
+sleep 2
+log "== all app + daemon processes cleared"
+
 # 3. Launch — REUSING make run for the default path.
 if [ "${SMOKE_SKIP_INSTALL:-0}" = "1" ]; then
   log "== SMOKE_SKIP_INSTALL=1: opening the existing /Applications copy"

@@ -205,6 +205,361 @@ public final class AppDaemonServiceProvider: AppDaemonAppDaemon.ServiceProtocol,
         }
     }
 
+    // MARK: - Auth plumbing
+
+    /// Step-2 schema-only stubs. The schemas and generated bindings exist,
+    /// but the runtime handlers land in the family migration (step 3).
+    /// Each stub fails typed (UNAVAILABLE) so a premature caller gets a
+    /// clean signal rather than an INTERNAL error.
+    private func step2Stub(_ method: String) -> Error {
+        AppDaemonFailure(
+            code: .unavailable,
+            message: "\(method) is schema-defined but not yet implemented (step-3 migration)")
+    }
+
+    public func createWiki(
+        request: GRPCCore.ServerRequest<AppDaemonCreateWikiRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonCreateWikiReply> {
+        try await wire { throw step2Stub("CreateWiki") }
+    }
+
+    public func deleteWiki(
+        request: GRPCCore.ServerRequest<AppDaemonDeleteWikiRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonDeleteWikiReply> {
+        try await wire { throw step2Stub("DeleteWiki") }
+    }
+
+    public func renameWiki(
+        request: GRPCCore.ServerRequest<AppDaemonRenameWikiRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonRenameWikiReply> {
+        try await wire { throw step2Stub("RenameWiki") }
+    }
+
+    public func resolveWiki(
+        request: GRPCCore.ServerRequest<AppDaemonResolveWikiRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonResolveWikiReply> {
+        try await wire { throw step2Stub("ResolveWiki") }
+    }
+
+    public func openStore(
+        request: GRPCCore.ServerRequest<AppDaemonOpenStoreRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonOpenStoreReply> {
+        try await wire { throw step2Stub("OpenStore") }
+    }
+
+    public func closeStore(
+        request: GRPCCore.ServerRequest<AppDaemonCloseStoreRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonCloseStoreReply> {
+        try await wire { throw step2Stub("CloseStore") }
+    }
+
+    public func getStoreChangeToken(
+        request: GRPCCore.ServerRequest<AppDaemonGetStoreChangeTokenRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonGetStoreChangeTokenReply> {
+        try await wire { throw step2Stub("GetStoreChangeToken") }
+    }
+
+    public func getPage(
+        request: GRPCCore.ServerRequest<AppDaemonGetPageRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonGetPageReply> {
+        try await wire { throw step2Stub("GetPage") }
+    }
+
+    public func listPages(
+        request: GRPCCore.ServerRequest<AppDaemonListPagesRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonListPagesReply> {
+        try await wire { throw step2Stub("ListPages") }
+    }
+
+    public func upsertPage(
+        request: GRPCCore.ServerRequest<AppDaemonUpsertPageRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonUpsertPageReply> {
+        try await wire { throw step2Stub("UpsertPage") }
+    }
+
+    public func storeSmall(
+        request: GRPCCore.ServerRequest<AppDaemonStoreSmallRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonStoreSmallReply> {
+        try await wire { throw step2Stub("StoreSmall") }
+    }
+
+    public func storeList(
+        request: GRPCCore.ServerRequest<AppDaemonStoreListRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonStoreListReply> {
+        try await wire { throw step2Stub("StoreList") }
+    }
+
+    public func storeBlob(
+        request: GRPCCore.ServerRequest<AppDaemonStoreBlobRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonStoreBlobReply> {
+        try await wire { throw step2Stub("StoreBlob") }
+    }
+
+    public func storeMutation(
+        request: GRPCCore.ServerRequest<AppDaemonStoreMutationRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonStoreMutationReply> {
+        try await wire { throw step2Stub("StoreMutation") }
+    }
+
+    public func beginPayloadUpload(
+        request: GRPCCore.ServerRequest<AppDaemonBeginPayloadUploadRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonBeginPayloadUploadReply> {
+        try await wire { throw step2Stub("BeginPayloadUpload") }
+    }
+
+    public func appendPayloadChunk(
+        request: GRPCCore.ServerRequest<AppDaemonAppendPayloadChunkRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonAppendPayloadChunkReply> {
+        try await wire { throw step2Stub("AppendPayloadChunk") }
+    }
+
+    public func commitPayloadUpload(
+        request: GRPCCore.ServerRequest<AppDaemonCommitPayloadUploadRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonCommitPayloadUploadReply> {
+        try await wire { throw step2Stub("CommitPayloadUpload") }
+    }
+
+    public func readPayloadChunk(
+        request: GRPCCore.ServerRequest<AppDaemonReadPayloadChunkRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonReadPayloadChunkReply> {
+        try await wire { throw step2Stub("ReadPayloadChunk") }
+    }
+
+    public func resolveStoreOutcome(
+        request: GRPCCore.ServerRequest<AppDaemonResolveStoreOutcomeRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonResolveStoreOutcomeReply> {
+        try await wire { throw step2Stub("ResolveStoreOutcome") }
+    }
+
+    public func getStoreSessionBootstrap(
+        request: GRPCCore.ServerRequest<AppDaemonGetStoreSessionBootstrapRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonGetStoreSessionBootstrapReply> {
+        try await wire { throw step2Stub("GetStoreSessionBootstrap") }
+    }
+
+    public func search(
+        request: GRPCCore.ServerRequest<AppDaemonSearchRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonSearchReply> {
+        try await wire { throw step2Stub("Search") }
+    }
+
+    public func autocomplete(
+        request: GRPCCore.ServerRequest<AppDaemonAutocompleteRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonAutocompleteReply> {
+        try await wire { throw step2Stub("Autocomplete") }
+    }
+
+    public func upgradeSearchIndex(
+        request: GRPCCore.ServerRequest<AppDaemonUpgradeSearchIndexRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonUpgradeSearchIndexReply> {
+        try await wire { throw step2Stub("UpgradeSearchIndex") }
+    }
+
+    public func getQueueSnapshot(
+        request: GRPCCore.ServerRequest<AppDaemonGetQueueSnapshotRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonGetQueueSnapshotReply> {
+        try await wire { throw step2Stub("GetQueueSnapshot") }
+    }
+
+    public func enqueueItem(
+        request: GRPCCore.ServerRequest<AppDaemonEnqueueItemRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonEnqueueItemReply> {
+        try await wire { throw step2Stub("EnqueueItem") }
+    }
+
+    public func cancelItem(
+        request: GRPCCore.ServerRequest<AppDaemonCancelItemRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonCancelItemReply> {
+        try await wire { throw step2Stub("CancelItem") }
+    }
+
+    public func cancelAllInFlight(
+        request: GRPCCore.ServerRequest<AppDaemonCancelAllInFlightRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonCancelAllInFlightReply> {
+        try await wire { throw step2Stub("CancelAllInFlight") }
+    }
+
+    public func retryItem(
+        request: GRPCCore.ServerRequest<AppDaemonRetryItemRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonRetryItemReply> {
+        try await wire { throw step2Stub("RetryItem") }
+    }
+
+    public func pauseQueue(
+        request: GRPCCore.ServerRequest<AppDaemonPauseQueueRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonPauseQueueReply> {
+        try await wire { throw step2Stub("PauseQueue") }
+    }
+
+    public func resumeQueue(
+        request: GRPCCore.ServerRequest<AppDaemonResumeQueueRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonResumeQueueReply> {
+        try await wire { throw step2Stub("ResumeQueue") }
+    }
+
+    public func haltQueue(
+        request: GRPCCore.ServerRequest<AppDaemonHaltQueueRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonHaltQueueReply> {
+        try await wire { throw step2Stub("HaltQueue") }
+    }
+
+    public func reorderItem(
+        request: GRPCCore.ServerRequest<AppDaemonReorderItemRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonReorderItemReply> {
+        try await wire { throw step2Stub("ReorderItem") }
+    }
+
+    public func hasActiveWork(
+        request: GRPCCore.ServerRequest<AppDaemonHasActiveWorkRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonHasActiveWorkReply> {
+        try await wire { throw step2Stub("HasActiveWork") }
+    }
+
+    public func loadQueueTranscript(
+        request: GRPCCore.ServerRequest<AppDaemonLoadQueueTranscriptRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonLoadQueueTranscriptReply> {
+        try await wire { throw step2Stub("LoadQueueTranscript") }
+    }
+
+    public func loadQueueActivitySnapshots(
+        request: GRPCCore.ServerRequest<AppDaemonLoadQueueActivitySnapshotsRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonLoadQueueActivitySnapshotsReply> {
+        try await wire { throw step2Stub("LoadQueueActivitySnapshots") }
+    }
+
+    public func loadQueueReport(
+        request: GRPCCore.ServerRequest<AppDaemonLoadQueueReportRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonLoadQueueReportReply> {
+        try await wire { throw step2Stub("LoadQueueReport") }
+    }
+
+    public func loadQueueReportSummaries(
+        request: GRPCCore.ServerRequest<AppDaemonLoadQueueReportSummariesRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonLoadQueueReportSummariesReply> {
+        try await wire { throw step2Stub("LoadQueueReportSummaries") }
+    }
+
+    public func getQueueOwnershipStatus(
+        request: GRPCCore.ServerRequest<AppDaemonGetQueueOwnershipStatusRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonGetQueueOwnershipStatusReply> {
+        try await wire { throw step2Stub("GetQueueOwnershipStatus") }
+    }
+
+    public func relinquishQueue(
+        request: GRPCCore.ServerRequest<AppDaemonRelinquishQueueRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonRelinquishQueueReply> {
+        try await wire { throw step2Stub("RelinquishQueue") }
+    }
+
+    public func startChat(
+        request: GRPCCore.ServerRequest<AppDaemonStartChatRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonStartChatReply> {
+        try await wire { throw step2Stub("StartChat") }
+    }
+
+    public func submitChatTurn(
+        request: GRPCCore.ServerRequest<AppDaemonSubmitChatTurnRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonSubmitChatTurnReply> {
+        try await wire { throw step2Stub("SubmitChatTurn") }
+    }
+
+    public func continueChat(
+        request: GRPCCore.ServerRequest<AppDaemonContinueChatRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonContinueChatReply> {
+        try await wire { throw step2Stub("ContinueChat") }
+    }
+
+    public func sendChatMessage(
+        request: GRPCCore.ServerRequest<AppDaemonSendChatMessageRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonSendChatMessageReply> {
+        try await wire { throw step2Stub("SendChatMessage") }
+    }
+
+    public func stopChat(
+        request: GRPCCore.ServerRequest<AppDaemonStopChatRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonStopChatReply> {
+        try await wire { throw step2Stub("StopChat") }
+    }
+
+    public func getChatSessionState(
+        request: GRPCCore.ServerRequest<AppDaemonGetChatSessionStateRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonGetChatSessionStateReply> {
+        try await wire { throw step2Stub("GetChatSessionState") }
+    }
+
+    public func getChatDiagnostics(
+        request: GRPCCore.ServerRequest<AppDaemonGetChatDiagnosticsRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonGetChatDiagnosticsReply> {
+        try await wire { throw step2Stub("GetChatDiagnostics") }
+    }
+
+    public func resetChatDiagnostics(
+        request: GRPCCore.ServerRequest<AppDaemonResetChatDiagnosticsRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonResetChatDiagnosticsReply> {
+        try await wire { throw step2Stub("ResetChatDiagnostics") }
+    }
+
+    public func resolveChatPermission(
+        request: GRPCCore.ServerRequest<AppDaemonResolveChatPermissionRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonResolveChatPermissionReply> {
+        try await wire { throw step2Stub("ResolveChatPermission") }
+    }
+
+    public func setChatConfigOption(
+        request: GRPCCore.ServerRequest<AppDaemonSetChatConfigOptionRequest>,
+        context: GRPCCore.ServerContext
+    ) async throws -> GRPCCore.ServerResponse<AppDaemonSetChatConfigOptionReply> {
+        try await wire { throw step2Stub("SetChatConfigOption") }
+    }
+
     /// Validate the bearer credential BEFORE any workload dispatch. Throws
     /// typed UNAUTHENTICATED for missing/unknown/revoked/prior-instance
     /// credentials.

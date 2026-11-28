@@ -49,6 +49,22 @@ public struct AppDaemonFailure: Error, Equatable, Sendable {
             case .unavailable: self = .unavailable
             case .resourceExhausted: self = .resourceExhausted
             case .deadlineExceeded: self = .deadlineExceeded
+            // Workload-family codes (step 2): no AppDaemonFailure.Code
+            // equivalent yet. They surface as the conservative .unavailable
+            // family when received; the mapping gains cases as the family
+            // migration adds typed producers.
+            case .storeOpenFailed, .storeSqlite, .pageNotFound,
+                 .chatNotFound, .sourceNotFound, .sourceVersionNotFound,
+                 .sourceMarkdownVersionNotFound, .noProcessedMarkdown,
+                 .deletionRestricted, .invalidBookmarkRow,
+                 .invalidRendererEventID, .storeUnexpected,
+                 .duplicateContent, .duplicateURL, .pageConflict,
+                 .pageCreateConflict, .pageExpectedTargetMissing,
+                 .strategyRevisionConflict, .sourceMarkdownConflict,
+                 .storeEpochMismatch, .outcomeUnknown,
+                 .queueOwnershipTransition, .operationFailed,
+                 .invalidEnvelope:
+                return nil
             case .unspecified, .UNRECOGNIZED: return nil
             }
         }

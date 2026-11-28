@@ -27,6 +27,10 @@ import "wikid/appdaemon/v1/capabilities.proto";
 import "wikid/appdaemon/v1/admission.proto";
 import "wikid/appdaemon/v1/events.proto";
 import "wikid/appdaemon/v1/registry.proto";
+import "wikid/appdaemon/v1/store.proto";
+import "wikid/appdaemon/v1/queue.proto";
+import "wikid/appdaemon/v1/chat.proto";
+import "wikid/appdaemon/v1/search.proto";
 
 option swift_prefix = "AppDaemon";
 
@@ -50,4 +54,83 @@ service AppDaemon {
   // session revocation; daemon-side overflow/epoch change fails the stream
   // with RESYNC_REQUIRED and the client resyncs from authoritative state.
   rpc SubscribeEvents(SubscribeEventsRequest) returns (stream DaemonEvent);
+
+  // --- Registry mutations (step 2) ---
+
+  rpc CreateWiki(CreateWikiRequest) returns (CreateWikiReply);
+  rpc DeleteWiki(DeleteWikiRequest) returns (DeleteWikiReply);
+  rpc RenameWiki(RenameWikiRequest) returns (RenameWikiReply);
+  rpc ResolveWiki(ResolveWikiRequest) returns (ResolveWikiReply);
+
+  // --- Store lifecycle (step 2) ---
+
+  rpc OpenStore(OpenStoreRequest) returns (OpenStoreReply);
+  rpc CloseStore(CloseStoreRequest) returns (CloseStoreReply);
+  rpc GetStoreChangeToken(GetStoreChangeTokenRequest) returns (GetStoreChangeTokenReply);
+
+  // --- Store hot path (step 2) ---
+
+  rpc GetPage(GetPageRequest) returns (GetPageReply);
+  rpc ListPages(ListPagesRequest) returns (ListPagesReply);
+  rpc UpsertPage(UpsertPageRequest) returns (UpsertPageReply);
+
+  // --- Store envelopes (step 2) ---
+
+  rpc StoreSmall(StoreSmallRequest) returns (StoreSmallReply);
+  rpc StoreList(StoreListRequest) returns (StoreListReply);
+  rpc StoreBlob(StoreBlobRequest) returns (StoreBlobReply);
+  rpc StoreMutation(StoreMutationRequest) returns (StoreMutationReply);
+
+  // --- Staged payload handles (step 2) ---
+
+  rpc BeginPayloadUpload(BeginPayloadUploadRequest) returns (BeginPayloadUploadReply);
+  rpc AppendPayloadChunk(AppendPayloadChunkRequest) returns (AppendPayloadChunkReply);
+  rpc CommitPayloadUpload(CommitPayloadUploadRequest) returns (CommitPayloadUploadReply);
+  rpc ReadPayloadChunk(ReadPayloadChunkRequest) returns (ReadPayloadChunkReply);
+
+  // --- Mutation outcome resolution (step 2) ---
+
+  rpc ResolveStoreOutcome(ResolveStoreOutcomeRequest) returns (ResolveStoreOutcomeReply);
+
+  // --- Store session bootstrap (step 2) ---
+
+  rpc GetStoreSessionBootstrap(GetStoreSessionBootstrapRequest) returns (GetStoreSessionBootstrapReply);
+
+  // --- Search (step 2) ---
+
+  rpc Search(SearchRequest) returns (SearchReply);
+  rpc Autocomplete(AutocompleteRequest) returns (AutocompleteReply);
+  rpc UpgradeSearchIndex(UpgradeSearchIndexRequest) returns (UpgradeSearchIndexReply);
+
+  // --- Queue (step 2) ---
+
+  rpc GetQueueSnapshot(GetQueueSnapshotRequest) returns (GetQueueSnapshotReply);
+  rpc EnqueueItem(EnqueueItemRequest) returns (EnqueueItemReply);
+  rpc CancelItem(CancelItemRequest) returns (CancelItemReply);
+  rpc CancelAllInFlight(CancelAllInFlightRequest) returns (CancelAllInFlightReply);
+  rpc RetryItem(RetryItemRequest) returns (RetryItemReply);
+  rpc PauseQueue(PauseQueueRequest) returns (PauseQueueReply);
+  rpc ResumeQueue(ResumeQueueRequest) returns (ResumeQueueReply);
+  rpc HaltQueue(HaltQueueRequest) returns (HaltQueueReply);
+  rpc ReorderItem(ReorderItemRequest) returns (ReorderItemReply);
+  rpc HasActiveWork(HasActiveWorkRequest) returns (HasActiveWorkReply);
+  rpc LoadQueueTranscript(LoadQueueTranscriptRequest) returns (LoadQueueTranscriptReply);
+  rpc LoadQueueActivitySnapshots(LoadQueueActivitySnapshotsRequest) returns (LoadQueueActivitySnapshotsReply);
+  rpc LoadQueueReport(LoadQueueReportRequest) returns (LoadQueueReportReply);
+  rpc LoadQueueReportSummaries(LoadQueueReportSummariesRequest) returns (LoadQueueReportSummariesReply);
+  rpc GetQueueOwnershipStatus(GetQueueOwnershipStatusRequest) returns (GetQueueOwnershipStatusReply);
+  rpc RelinquishQueue(RelinquishQueueRequest) returns (RelinquishQueueReply);
+
+  // --- Chat (step 2) ---
+
+  rpc StartChat(StartChatRequest) returns (StartChatReply);
+  rpc SubmitChatTurn(SubmitChatTurnRequest) returns (SubmitChatTurnReply);
+  rpc ContinueChat(ContinueChatRequest) returns (ContinueChatReply);
+  rpc SendChatMessage(SendChatMessageRequest) returns (SendChatMessageReply);
+  rpc StopChat(StopChatRequest) returns (StopChatReply);
+  rpc GetChatSessionState(GetChatSessionStateRequest) returns (GetChatSessionStateReply);
+  rpc GetChatDiagnostics(GetChatDiagnosticsRequest) returns (GetChatDiagnosticsReply);
+  rpc ResetChatDiagnostics(ResetChatDiagnosticsRequest) returns (ResetChatDiagnosticsReply);
+  rpc ResolveChatPermission(ResolveChatPermissionRequest) returns (ResolveChatPermissionReply);
+  rpc SetChatConfigOption(SetChatConfigOptionRequest) returns (SetChatConfigOptionReply);
 }

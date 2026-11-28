@@ -1,0 +1,259 @@
+// Chat family (step 2, plans/app-daemon-wire-contract.md §"Chat family
+// design"). Typed RPCs replacing the ChatXPCRequest JSON selectors. Chat
+// events hang off SubscribeEvents at EVENT_FAMILY_CHAT in step 3.
+//
+// Redaction rule: diagnostics never carry raw user or assistant text,
+// tool inputs, credential values, fingerprint keys, or unredacted stderr.
+syntax = "proto3";
+
+package wikid.appdaemon.v1;
+
+import "google/protobuf/timestamp.proto";
+import "wikid/appdaemon/v1/common.proto";
+
+option swift_prefix = "AppDaemon";
+
+message StartChatRequest {
+  WikiId wiki_id = 1;
+  // The first user message.
+  string first_message = 2;
+  // Optional overrides; absence uses the session defaults.
+  optional string provider_id = 3;
+  optional string model_id = 4;
+  // Provider-defined thinking-option identifiers and values.
+  map<string, string> thinking_options = 5;
+}
+
+message StartChatReply {
+  // The authoritative chat identity.
+  ChatId chat_id = 1;
+}
+
+message SubmitChatTurnRequest {
+  WikiId wiki_id = 1;
+  // Tagged target: a draft session (carrying overrides) or an existing
+  // chat.
+  oneof target {
+    DraftTarget draft = 2;
+    ChatId existing = 3;
+  }
+
+  message DraftTarget {
+    optional string provider_id = 1;
+    optional string model_id = 2;
+    map<string, string> thinking_options = 3;
+  }
+}
+
+// The typed submission context.
+message ChatTurnSubmission {
+  string command_id = 1;
+  string turn_id = 2;
+  string user_text = 3;
+  // Tagged references the turn cites.
+  repeated ChatReference references = 4;
+  google.protobuf.Timestamp submitted_at = 5;
+}
+
+message ChatReference {
+  oneof reference {
+    PageId page = 1;
+    SourceId source = 2;
+    ChatId chat = 3;
+  }
+}
+
+message SubmitChatTurnReply {
+  // The authoritative chat identity (the draft became a chat).
+  ChatId chat_id = 1;
+}
+
+message ContinueChatRequest {
+  WikiId wiki_id = 1;
+  ChatId chat_id = 2;
+  string user_text = 3;
+}
+
+message ContinueChatReply {
+  reserved 1 to 16;
+}
+
+message SendChatMessageRequest {
+  WikiId wiki_id = 1;
+  ChatId chat_id = 2;
+  string user_text = 3;
+}
+
+message SendChatMessageReply {
+  reserved 1 to 16;
+}
+
+message StopChatRequest {
+  WikiId wiki_id = 1;
+  ChatId chat_id = 2;
+}
+
+// An acknowledgement, not a terminal event: terminal state arrives via
+// the chat event family (step 3).
+message StopChatReply {
+  reserved 1 to 16;
+}
+
+message GetChatSessionStateRequest {
+  WikiId wiki_id = 1;
+  ChatId chat_id = 2;
+}
+
+// The authoritative live-session projection. Typed fields replace the
+// legacy run-flag cluster; absent fields mean "not present", not a
+// default value.
+message GetChatSessionStateReply {
+  enum Lifecycle {
+    LIFECYCLE_UNSPECIFIED = 0;
+    LIFECYCLE_READY = 1;
+    LIFECYCLE_RECOVERING = 2;
+    LIFECYCLE_CLOSED = 3;
+  }
+
+  enum TurnState {
+    TURN_STATE_UNSPECIFIED = 0;
+    TURN_STATE_IDLE = 1;
+    TURN_STATE_GENERATING = 2;
+    TURN_STATE_FAILED = 3;
+  }
+
+  Lifecycle lifecycle = 1;
+  TurnState turn_state = 2;
+  // Queued turn count awaiting generation.
+  uint32 queued_turns = 3;
+  // Provider and model identifiers of the live session.
+  optional string provider_id = 4;
+  optional string model_id = 5;
+  // Attention marker count for the session.
+  uint32 attention_count = 6;
+  // Usage totals for the session lifetime.
+  optional ChatUsage usage = 7;
+  // The active transcript content (bounded batch; see family bounds).
+  repeated ChatTranscriptRow transcript = 8;
+  // Present when a permission request is pending.
+  optional ChatPendingPermission pending_permission = 9;
+  // Present when a run is active; run metadata only.
+  optional ChatRunMetadata run_metadata = 10;
+}
+
+message ChatUsage {
+  uint64 input_tokens = 1;
+  uint64 output_tokens = 2;
+  uint64 total_tokens = 3;
+}
+
+message ChatTranscriptRow {
+  enum Role {
+    ROLE_UNSPECIFIED = 0;
+    ROLE_USER = 1;
+    ROLE_ASSISTANT = 2;
+    ROLE_TOOL = 3;
+    ROLE_SYSTEM = 4;
+  }
+
+  string turn_id = 1;
+  Role role = 2;
+  string body = 3;
+  google.protobuf.Timestamp created_at = 4;
+  // Present for tool rows that name a tool.
+  optional string tool_name = 5;
+}
+
+message ChatPendingPermission {
+  string request_id = 1;
+  // The tool or action awaiting approval; safe display text.
+  string summary = 2;
+  // Provider-offered options; reject must pick none of these.
+  repeated string option_ids = 3;
+}
+
+message ChatRunMetadata {
+  string run_id = 1;
+  optional string acp_session_id = 2;
+}
+
+message ResolveChatPermissionRequest {
+  WikiId wiki_id = 1;
+  ChatId chat_id = 2;
+  string request_id = 3;
+  oneof decision {
+    // Approve with (or without) one of the offered option ids.
+    ApproveWithOptions approve = 4;
+    RejectReason reject = 5;
+  }
+
+  message ApproveWithOptions {
+    // Must be one of the options the request offered; absent = plain
+    // approve.
+    optional string option_id = 1;
+  }
+
+  message RejectReason {
+    // Safe display text for the rejection; bounded.
+    string reason = 1;
+  }
+}
+
+message ResolveChatPermissionReply {
+  reserved 1 to 16;
+}
+
+message SetChatConfigOptionRequest {
+  WikiId wiki_id = 1;
+  ChatId chat_id = 2;
+  // Provider-defined identifiers, not free-form commands or a closed
+  // enum.
+  string option_id = 3;
+  string value_id = 4;
+}
+
+message SetChatConfigOptionReply {
+  reserved 1 to 16;
+}
+
+message GetChatDiagnosticsRequest {
+  // Absent = process-wide diagnostic snapshot.
+  optional ChatId chat_id = 1;
+}
+
+// A versioned, bounded, REDACTED diagnostic export. Never carries raw
+// user or assistant text, tool inputs, credential values, fingerprint
+// keys, or unredacted stderr.
+message GetChatDiagnosticsReply {
+  // The export's own semantics version; the client rejects unknown
+  // versions rather than guessing (CODE_CAPABILITY_MISMATCH).
+  uint32 version = 1;
+  // Process identity of the exporting diagnostic ring.
+  string process_identity = 2;
+  // Ordered entries; each bounded.
+  repeated ChatDiagnosticEntry entries = 3;
+  // Entries dropped by the ring before this export.
+  uint64 dropped_count = 4;
+  // The export reference the acknowledgement must carry.
+  string export_reference = 5;
+}
+
+message ChatDiagnosticEntry {
+  google.protobuf.Timestamp at = 1;
+  // Typed stage/outcome identifiers (redacted).
+  string stage = 2;
+  string outcome = 3;
+  // Keyed fingerprint reference; never the key material itself.
+  optional string fingerprint_reference = 4;
+}
+
+message ResetChatDiagnosticsRequest {
+  // Process identity + export reference bind the acknowledgement; a stale
+  // acknowledgement must not rotate a newer ring.
+  string process_identity = 1;
+  string export_reference = 2;
+}
+
+message ResetChatDiagnosticsReply {
+  reserved 1 to 16;
+}
